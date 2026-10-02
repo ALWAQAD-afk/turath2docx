@@ -30,7 +30,35 @@ button {
 <h1>تراث ← Word</h1>
 <p>Parser v4 — بنية تراث وحفظ مواضع الصفحات.</p>
 
-<button id="make">إنشاء DOCX</button>
+
+<div style="margin:24px 0">
+  <label for="bookUrl" style="display:block;margin-bottom:10px">
+    رابط الكتاب في تراث
+  </label>
+
+  <input
+    id="bookUrl"
+    type="url"
+    value="https://app.turath.io/book/6684"
+    placeholder="https://app.turath.io/book/6684"
+    dir="ltr"
+    style="box-sizing:border-box;width:100%;padding:14px;font-size:16px;margin-bottom:12px"
+  >
+
+  <button id="make">إنشاء Word — أول 50 صفحة</button>
+</div>
+
+<hr style="margin:28px 0">
+
+<div>
+  <p>أو اختر ملف EPUB من جهازك:</p>
+  <input
+    id="epubInput"
+    type="file"
+    accept=".epub,application/epub+zip"
+  >
+</div>
+
 <div id="status">جاهز.</div>
 
 <script src="https://unpkg.com/docx@9.5.1/dist/index.umd.cjs"></script>
