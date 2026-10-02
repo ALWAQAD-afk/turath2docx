@@ -1,0 +1,17 @@
+{
+  "name": "turath2docx",
+  "version": "1.0.0",
+  "description": "",
+  "main": "turath-v4-check.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "node server/server.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "dependencies": {
+    "express": "^5.2.1"
+  }
+}

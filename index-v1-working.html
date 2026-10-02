@@ -1,0 +1,364 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>تراث ← Word</title>
+
+<style>
+body {
+  font-family: sans-serif;
+  max-width: 700px;
+  margin: 30px auto;
+  padding: 20px;
+  line-height: 1.8;
+}
+button {
+  width: 100%;
+  padding: 14px;
+  font-size: 18px;
+}
+#status {
+  margin-top: 20px;
+  white-space: pre-wrap;
+}
+</style>
+</head>
+
+<body>
+
+<h1>تراث ← Word</h1>
+<p>تجربة معالجة عشر صفحات محليًا.</p>
+
+<button id="make">إنشاء DOCX</button>
+
+<div id="status">جاهز.</div>
+
+<script src="https://unpkg.com/docx@9.5.1/dist/index.umd.cjs"></script>
+
+<script>
+const statusEl = document.getElementById("status");
+
+function cleanText(text) {
+  return text
+    .replace(/\u00A0/g, " ")
+    .replace(/[ \t]+/g, " ")
+    .replace(/\n[ \t]+/g, "\n")
+    .replace(/[ \t]+\n/g, "\n")
+    .trim();
+}
+
+function normalParagraph(text) {
+  return new docx.Paragraph({
+    bidirectional: true,
+
+    alignment: docx.AlignmentType.JUSTIFIED,
+
+    spacing: {
+      line: 360,
+      after: 120
+    },
+
+    children: [
+      new docx.TextRun({
+        text,
+        font: "Traditional Arabic",
+        size: 30
+      })
+    ]
+  });
+}
+
+function headingParagraph(text, level = 1) {
+  const size = level === 1 ? 36 : 32;
+
+  return new docx.Paragraph({
+    bidirectional: true,
+
+    alignment: docx.AlignmentType.CENTER,
+
+    spacing: {
+      before: 240,
+      after: 180
+    },
+
+    keepNext: true,
+
+    children: [
+      new docx.TextRun({
+        text,
+        bold: true,
+        font: "Traditional Arabic",
+        size
+      })
+    ]
+  });
+}
+
+function pageMarker(vol, page) {
+  return new docx.Paragraph({
+    bidirectional: true,
+
+    alignment: docx.AlignmentType.CENTER,
+
+    spacing: {
+      before: 100,
+      after: 100
+    },
+
+    children: [
+      new docx.TextRun({
+        text: `﴿ الجزء ${vol} — ص ${page} ﴾`,
+        font: "Traditional Arabic",
+        size: 20,
+        italics: true
+      })
+    ]
+  });
+}
+
+function parsePage(pageData) {
+  const meta = JSON.parse(pageData.meta);
+
+  const parser = new DOMParser();
+
+  const parsed = parser.parseFromString(
+    `<div id="root">${pageData.text}</div>`,
+    "text/html"
+  );
+
+  const root = parsed.getElementById("root");
+
+  const result = [];
+
+  let buffer = "";
+
+  function flushBuffer() {
+    const text = cleanText(buffer);
+
+    if (text && text !== "." && text !== "ــ") {
+      result.push({
+        type: "text",
+        text
+      });
+    }
+
+    buffer = "";
+  }
+
+  for (const node of root.childNodes) {
+
+    if (
+      node.nodeType === Node.ELEMENT_NODE &&
+      node.dataset?.type === "title"
+    ) {
+      flushBuffer();
+
+      const text = cleanText(node.textContent);
+
+      if (text) {
+        result.push({
+          type: "title",
+          text
+        });
+      }
+
+      continue;
+    }
+
+    if (node.nodeName === "BR") {
+      buffer += "\n";
+      continue;
+    }
+
+    if (node.nodeType === Node.TEXT_NODE) {
+      buffer += node.textContent;
+      continue;
+    }
+
+    if (node.nodeType === Node.ELEMENT_NODE) {
+      buffer += node.textContent;
+    }
+  }
+
+  flushBuffer();
+
+  return {
+    meta,
+    blocks: result
+  };
+}
+
+async function loadPages(count) {
+  const pages = [];
+
+  for (let i = 1; i <= count; i++) {
+    statusEl.textContent =
+      `قراءة الصفحة ${i} من ${count}...`;
+
+    const response = await fetch(`./pages/${i}.json`);
+
+    if (!response.ok) {
+      throw new Error(
+        `تعذر قراءة الصفحة ${i}: HTTP ${response.status}`
+      );
+    }
+
+    pages.push(
+      parsePage(await response.json())
+    );
+  }
+
+  return pages;
+}
+
+document.getElementById("make").onclick = async () => {
+
+  try {
+
+    const pages = await loadPages(10);
+
+    statusEl.textContent =
+      "تحليل النص وبناء Word...";
+
+    const children = [];
+
+    /* صفحة العنوان */
+
+    children.push(
+      new docx.Paragraph({
+        bidirectional: true,
+        alignment: docx.AlignmentType.CENTER,
+
+        spacing: {
+          before: 400,
+          after: 240
+        },
+
+        children: [
+          new docx.TextRun({
+            text: pages[0].meta.book_name,
+            bold: true,
+            font: "Traditional Arabic",
+            size: 44
+          })
+        ]
+      })
+    );
+
+    children.push(
+      new docx.Paragraph({
+        bidirectional: true,
+        alignment: docx.AlignmentType.CENTER,
+
+        spacing: {
+          after: 400
+        },
+
+        children: [
+          new docx.TextRun({
+            text: pages[0].meta.author_name,
+            font: "Traditional Arabic",
+            size: 30
+          })
+        ]
+      })
+    );
+
+    /*
+      صفحات الكتاب.
+
+      مهم:
+      لا نستعمل PageBreak هنا.
+      الصفحة المطبوعة ليست صفحة Word جديدة.
+    */
+
+    for (const page of pages) {
+
+      children.push(
+        pageMarker(page.meta.vol, page.meta.page)
+      );
+
+      for (const block of page.blocks) {
+
+        if (block.type === "title") {
+          children.push(
+            headingParagraph(block.text)
+          );
+        }
+
+        else if (block.type === "text") {
+          children.push(
+            normalParagraph(block.text)
+          );
+        }
+      }
+    }
+
+    const documentFile =
+      new docx.Document({
+
+        sections: [{
+          properties: {
+
+            page: {
+              margin: {
+                top: 900,
+                right: 900,
+                bottom: 900,
+                left: 900
+              }
+            }
+
+          },
+
+          children
+        }]
+      });
+
+    statusEl.textContent =
+      "ضغط ملف DOCX...";
+
+    const blob =
+      await docx.Packer.toBlob(documentFile);
+
+    const url =
+      URL.createObjectURL(blob);
+
+    const a =
+      document.createElement("a");
+
+    a.href = url;
+
+    a.download =
+      "المنتقى-تجربة-10-صفحات.docx";
+
+    a.click();
+
+    setTimeout(
+      () => URL.revokeObjectURL(url),
+      10000
+    );
+
+    statusEl.textContent =
+      "✓ تم إنشاء عشر صفحات\n" +
+      `الحجم: ${(blob.size / 1024).toFixed(1)} KB`;
+
+  }
+
+  catch (error) {
+
+    console.error(error);
+
+    statusEl.textContent =
+      "❌ فشل\n\n" +
+      error.name +
+      ": " +
+      error.message;
+  }
+
+};
+</script>
+
+</body>
+</html>
