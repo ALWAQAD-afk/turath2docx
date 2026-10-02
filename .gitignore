@@ -2,3 +2,20 @@ node_modules/
 .env
 *.log
 .DS_Store
+
+# Local test data
+__pycache__/
+*.pyc
+*.epub
+*.docx
+page*.json
+book-*.json
+book-info.json
+headers.txt
+file-headers.txt
+
+# Development backups / experiments
+index-v*-backup*
+index-v*-working*
+index-v*-safe*
+index-v*-before-*
