@@ -425,40 +425,107 @@ document.getElementById("make").onclick = async () => {
       children: allChildren
     }];
 
-    // PATCH #1:
-    // docx.js يضيف Document Grid افتراضياً:
-    // <w:docGrid w:linePitch="360"/>
-    // نحذفه حتى تكون line spacing هي المتحكمة وحدها.
-    async function removeDocGrid(blob) {
+    // PATCH #4 — match Golden python-docx settings.xml
+    //
+    // المقارنة أثبتت أن Golden الناجح يحتوي docGrid،
+    // لذلك لا نحذفه هنا.
+    //
+    // نطابق إعدادات Word المؤثرة في التخطيط مع
+    // الملف الذي أنشأه python-docx ونجح 1/1.
+
+    async function applyGoldenSettings(blob) {
       const zip = await JSZip.loadAsync(blob);
 
-      const files = Object.keys(zip.files)
-        .filter(name =>
-          /^word\/(document|header\d+|footer\d+)\.xml$/.test(name)
+      const settingsFile =
+        zip.file("word/settings.xml");
+
+      if (!settingsFile) {
+        throw new Error(
+          "word/settings.xml غير موجود داخل DOCX"
         );
-
-      for (const name of files) {
-        let xml = await zip.file(name).async("string");
-
-        xml = xml.replace(
-          /<w:docGrid\b[^>]*\/>/g,
-          ""
-        );
-
-        xml = xml.replace(
-          /<w:docGrid\b[^>]*>[\s\S]*?<\/w:docGrid>/g,
-          ""
-        );
-
-        zip.file(name, xml);
       }
+
+      let xml =
+        await settingsFile.async("string");
+
+      // 1) compatibilityMode: 15 -> 14
+      xml = xml.replace(
+        /(<w:compatSetting\b[^>]*\bw:name="compatibilityMode"[^>]*\bw:val=")15(")/,
+        "$114$2"
+      );
+
+      /*
+       * قد يختلف ترتيب attributes، لذلك إن بقي 15
+       * نلتقط compatSetting الذي يحمل compatibilityMode
+       * بصرف النظر عن ترتيبها.
+       */
+      xml = xml.replace(
+        /<w:compatSetting\b([^>]*\bw:name="compatibilityMode"[^>]*)\/>/g,
+        match =>
+          match.replace(
+            /\bw:val="[^"]*"/,
+            'w:val="14"'
+          )
+      );
+
+      // نحذف نسخًا سابقة من الخصائص التي سنضيفها،
+      // حتى لا تتكرر إذا تغير خرج docx.js لاحقًا.
+      xml = xml.replace(
+        /<w:defaultTabStop\b[^>]*\/>/g,
+        ""
+      );
+
+      xml = xml.replace(
+        /<w:characterSpacingControl\b[^>]*\/>/g,
+        ""
+      );
+
+      // Golden:
+      // <w:defaultTabStop w:val="720"/>
+      // <w:characterSpacingControl w:val="doNotCompress"/>
+      //
+      // نضيفهما قبل <w:compat>.
+      xml = xml.replace(
+        /<w:compat\b/,
+        '<w:defaultTabStop w:val="720"/>' +
+        '<w:characterSpacingControl w:val="doNotCompress"/>' +
+        '<w:compat'
+      );
+
+      // أضف compat flags الموجودة في Golden.
+      xml = xml.replace(
+        /<w:compat\b([^>]*)>/,
+        (match) => {
+          return match +
+            '<w:useFELayout/>' +
+            '<w:compatSetting ' +
+              'w:name="overrideTableStyleFontSizeAndJustification" ' +
+              'w:uri="http://schemas.microsoft.com/office/word" ' +
+              'w:val="1"/>' +
+            '<w:compatSetting ' +
+              'w:name="enableOpenTypeFeatures" ' +
+              'w:uri="http://schemas.microsoft.com/office/word" ' +
+              'w:val="1"/>' +
+            '<w:compatSetting ' +
+              'w:name="doNotFlipMirrorIndents" ' +
+              'w:uri="http://schemas.microsoft.com/office/word" ' +
+              'w:val="1"/>';
+        }
+      );
+
+      zip.file(
+        "word/settings.xml",
+        xml
+      );
 
       return await zip.generateAsync({
         type: "blob",
         mimeType:
           "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         compression: "DEFLATE",
-        compressionOptions: { level: 6 }
+        compressionOptions: {
+          level: 6
+        }
       });
     }
 
@@ -474,7 +541,7 @@ document.getElementById("make").onclick = async () => {
       await docx.Packer.toBlob(documentFile);
 
     const blob =
-      await removeDocGrid(rawBlob);
+      await applyGoldenSettings(rawBlob);
 
     const url =
       URL.createObjectURL(blob);
