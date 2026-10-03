@@ -350,16 +350,17 @@ document.getElementById("make").onclick = async () => {
       "بناء Word بنمط 1:1...";
 
     /*
-      نستخدم Section لكل صفحة في اختبار الـ50.
-      فائدته الآن:
-      - حد الصفحة قطعي.
-      - footer يأخذ meta.page الحقيقي من تراث.
-      - لا نعتمد على تخمين ترقيم API.
+      PATCH #2 — Golden structure
 
-      بعد نجاح 50/50 يمكننا تحسين بنية 2236 صفحة
-      دون المساس بالتنسيق.
+      الجزء الحالي = Section واحد فقط.
+      كل صفحة مصدر بعد الأولى تبدأ بـ pageBreakBefore.
+
+      هذا يطابق بنية Golden Python:
+      - Section لكل جزء، لا لكل صفحة.
+      - حدود صفحات المصدر عبر pageBreakBefore.
     */
-    const sections = [];
+
+    const allChildren = [];
 
     for (let i = 0; i < pages.length; i++) {
       const page = pages[i];
@@ -373,44 +374,51 @@ document.getElementById("make").onclick = async () => {
         }];
       }
 
-      const children = blocks.map(
-        (block, j) =>
-          makeParagraph(block, false)
-      );
-
-      sections.push({
-        properties: {
-          type:
-            i === 0
-              ? undefined
-              : docx.SectionType.NEXT_PAGE,
-
-          page: {
-            size: {
-              width: 11906,
-              height: 16838
-            },
-
-            margin: {
-              top: 794,       // 14 mm
-              bottom: 794,    // 14 mm
-              left: 907,      // 16 mm
-              right: 907,     // 16 mm
-              footer: 283     // 5 mm
-            }
-          }
-        },
-
-        footers: {
-          default: footerFor(
-            page.meta.vol,
-            page.meta.page
+      for (let j = 0; j < blocks.length; j++) {
+        allChildren.push(
+          makeParagraph(
+            blocks[j],
+            i > 0 && j === 0
           )
-        },
-
-        children
-      });
+        );
+      }
     }
+
+    const sections = [{
+      properties: {
+        page: {
+          size: {
+            width: 11906,
+            height: 16838
+          },
+
+          margin: {
+            top: 794,       // 14 mm
+            bottom: 794,    // 14 mm
+            left: 907,      // 16 mm
+            right: 907,     // 16 mm
+            footer: 283     // 5 mm
+          }
+        }
+      },
+
+      /*
+        مؤقت في اختبار الـ50:
+        كلها من الجزء الأول.
+
+        نستخدم footer واحدًا للقسم.
+        لاحقًا في النسخة الكاملة سننشئ
+        Section واحدًا لكل جزء ونستخدم PAGE field.
+      */
+      footers: {
+        default: footerFor(
+          pages[0].meta.vol,
+          pages[0].meta.page
+        )
+      },
+
+      children: allChildren
+    }];
 
     // PATCH #1:
     // docx.js يضيف Document Grid افتراضياً:
