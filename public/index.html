@@ -23,6 +23,7 @@ button {
   white-space: pre-wrap;
 }
 </style>
+<script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
 </head>
 
 <body>
@@ -46,6 +47,10 @@ button {
   >
 
   <button id="make">إنشاء Word — أول 50 صفحة</button>
+<button id="diagnose"
+ style="margin-top:12px">
+ تشخيص 50 صفحة
+</button>
 </div>
 
 <hr style="margin:28px 0">
@@ -463,6 +468,148 @@ document.getElementById("make").onclick = async () => {
       error.message;
   }
 };
+
+document.getElementById("diagnose").onclick = async () => {
+  try {
+    const bookId = getBookId();
+
+    statusEl.textContent =
+      "جلب صفحات التشخيص...";
+
+    const pages =
+      await loadPages(bookId, 50);
+
+    const zip = new JSZip();
+
+    for (let i = 0; i < pages.length; i++) {
+      const page = pages[i];
+
+      statusEl.textContent =
+        `إنشاء ملف ${i + 1}/50...`;
+
+      let blocks = page.blocks;
+
+      if (!blocks.length) {
+        blocks = [{
+          type: "paragraph",
+          text: ""
+        }];
+      }
+
+      const children = blocks.map(
+        block => makeParagraph(block, false)
+      );
+
+      /*
+       * ملف مستقل تمامًا:
+       * لا Sections سابقة،
+       * لا NEXT_PAGE،
+       * لا أثر لصفحة أخرى.
+       */
+      const d = new docx.Document({
+        sections: [{
+          properties: {
+            page: {
+              size: {
+                width: 11906,
+                height: 16838
+              },
+              margin: {
+                top: 794,
+                bottom: 794,
+                left: 907,
+                right: 907,
+                footer: 283
+              }
+            }
+          },
+
+          footers: {
+            default: footerFor(
+              page.meta.vol,
+              page.meta.page
+            )
+          },
+
+          children
+        }]
+      });
+
+      const blob =
+        await docx.Packer.toBlob(d);
+
+      const bytes =
+        await blob.arrayBuffer();
+
+      const n =
+        String(i + 1).padStart(3, "0");
+
+      const printed =
+        String(page.meta.page)
+          .padStart(3, "0");
+
+      zip.file(
+        `source-${n}_vol-${page.meta.vol}_page-${printed}.docx`,
+        bytes
+      );
+
+      /*
+       * ملف فهرس حتى نعرف الربط قطعًا.
+       */
+      zip.file(
+        `source-${n}.txt`,
+        [
+          `internal source: ${i + 1}`,
+          `volume: ${page.meta.vol}`,
+          `printed page: ${page.meta.page}`,
+          `blocks: ${page.blocks.length}`
+        ].join("\n")
+      );
+    }
+
+    statusEl.textContent =
+      "ضغط ملفات التشخيص...";
+
+    const zipBlob =
+      await zip.generateAsync({
+        type: "blob",
+        compression: "DEFLATE",
+        compressionOptions: {
+          level: 6
+        }
+      });
+
+    const url =
+      URL.createObjectURL(zipBlob);
+
+    const a =
+      document.createElement("a");
+
+    a.href = url;
+    a.download =
+      "turath-diagnostic-50.zip";
+
+    a.click();
+
+    setTimeout(
+      () => URL.revokeObjectURL(url),
+      10000
+    );
+
+    statusEl.textContent =
+      "✓ تم إنشاء ZIP التشخيص\n" +
+      "50 صفحة مصدر = 50 ملف Word مستقل";
+
+  } catch (error) {
+    console.error(error);
+
+    statusEl.textContent =
+      "❌ فشل التشخيص\n\n" +
+      error.name + ": " +
+      error.message;
+  }
+};
+
 </script>
 
 </body>
