@@ -412,6 +412,43 @@ document.getElementById("make").onclick = async () => {
       });
     }
 
+    // PATCH #1:
+    // docx.js يضيف Document Grid افتراضياً:
+    // <w:docGrid w:linePitch="360"/>
+    // نحذفه حتى تكون line spacing هي المتحكمة وحدها.
+    async function removeDocGrid(blob) {
+      const zip = await JSZip.loadAsync(blob);
+
+      const files = Object.keys(zip.files)
+        .filter(name =>
+          /^word\/(document|header\d+|footer\d+)\.xml$/.test(name)
+        );
+
+      for (const name of files) {
+        let xml = await zip.file(name).async("string");
+
+        xml = xml.replace(
+          /<w:docGrid\b[^>]*\/>/g,
+          ""
+        );
+
+        xml = xml.replace(
+          /<w:docGrid\b[^>]*>[\s\S]*?<\/w:docGrid>/g,
+          ""
+        );
+
+        zip.file(name, xml);
+      }
+
+      return await zip.generateAsync({
+        type: "blob",
+        mimeType:
+          "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        compression: "DEFLATE",
+        compressionOptions: { level: 6 }
+      });
+    }
+
     const documentFile =
       new docx.Document({
         sections
@@ -420,8 +457,11 @@ document.getElementById("make").onclick = async () => {
     statusEl.textContent =
       "ضغط DOCX...";
 
-    const blob =
+    const rawBlob =
       await docx.Packer.toBlob(documentFile);
+
+    const blob =
+      await removeDocGrid(rawBlob);
 
     const url =
       URL.createObjectURL(blob);
@@ -535,8 +575,11 @@ document.getElementById("diagnose").onclick = async () => {
         }]
       });
 
-      const blob =
+      const rawBlob =
         await docx.Packer.toBlob(d);
+
+      const blob =
+        await removeDocGrid(rawBlob);
 
       const bytes =
         await blob.arrayBuffer();
