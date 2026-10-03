@@ -1,16 +1,18 @@
 {
   "name": "turath2docx",
   "version": "1.0.0",
-  "description": "",
-  "main": "turath-v4-check.js",
+  "description": "Turath to DOCX converter with 1:1 page preservation",
+  "main": "server/server.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
     "start": "node server/server.js"
   },
-  "keywords": [],
-  "author": "",
+  "keywords": ["turath", "docx", "arabic"],
+  "author": "ALWAQAD",
   "license": "ISC",
   "type": "module",
+  "engines": {
+    "node": ">=20.0.0"
+  },
   "dependencies": {
     "express": "^5.2.1"
   }

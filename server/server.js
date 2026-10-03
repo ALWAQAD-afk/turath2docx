@@ -1,10 +1,36 @@
 import express from "express";
+import fs from "fs";
+import path from "path";
 
 const app = express();
 
 const PORT = process.env.PORT || 3000;
 const API = "https://api.turath.io";
 const VER = 3;
+
+// PATCH #13 — cache على القرص يقلل ضغط Turath
+const CACHE_DIR = path.resolve("server/cache");
+try { fs.mkdirSync(CACHE_DIR, { recursive: true }); } catch (e) {}
+
+function cacheFile(bookId, pg) {
+  return path.join(CACHE_DIR, String(bookId), String(pg) + ".json");
+}
+
+function readCache(bookId, pg) {
+  try {
+    const p = cacheFile(bookId, pg);
+    if (!fs.existsSync(p)) return null;
+    return JSON.parse(fs.readFileSync(p, "utf8"));
+  } catch (e) { return null; }
+}
+
+function writeCache(bookId, pg, data) {
+  try {
+    const dir = path.join(CACHE_DIR, String(bookId));
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(cacheFile(bookId, pg), JSON.stringify(data));
+  } catch (e) {}
+}
 
 app.use(express.static("public"));
 
@@ -46,24 +72,30 @@ function parsePage(data) {
 }
 
 async function getPage(bookId, pg) {
-  return parsePage(
+  // PATCH #13 — cache أولًا
+  const cached = readCache(bookId, pg);
+  if (cached) return cached;
+
+  const data = parsePage(
     await turath("/page", {
       book_id: bookId,
       pg,
       ver: VER
     })
   );
+  writeCache(bookId, pg, data);
+  return data;
 }
 
 async function getPageRetry(bookId, pg) {
-  for (let attempt = 0; attempt < 6; attempt++) {
+  for (let attempt = 0; attempt < 3; attempt++) {
     try {
       return await getPage(bookId, pg);
     } catch (e) {
       if (e.status === 404) throw e;
 
       const wait = Math.min(
-        30000,
+        5000,
         1000 * 2 ** attempt
       );
 
@@ -146,7 +178,7 @@ app.get("/api/book/:id/pages", async (req, res) => {
     }
 
     await Promise.all(
-      Array.from({ length: 4 }, () => worker())
+      Array.from({ length: 8 }, () => worker())
     );
 
     res.json({

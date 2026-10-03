@@ -51,6 +51,9 @@ button {
  style="margin-top:12px">
  تشخيص 50 صفحة
 </button>
+<button id="makeFull" style="margin-top:12px;background:#0b7;color:#fff;font-weight:bold">
+  إنشاء الكتاب كاملًا (2236 صفحة)
+</button>
 </div>
 
 <hr style="margin:28px 0">
@@ -321,6 +324,155 @@ function makeParagraph(block, firstOnPage) {
   });
 }
 
+// PATCH #6 — كشف الـrunning header (صور OCR لكلمة «المنتقى»)
+const RUNNING_HEADER_VARIANTS = [
+  "المنتقى","المستقى","المنعقى","المنفس","المنفى",
+  "المنسقى","المنفع","المنغفى","المنعق","المغنى",
+  "المنقى","المشتقى","المنفقى","المنعقی","المستقی",
+  "المنتقى","المنفی","المنفیة","المنفیه"
+];
+
+function isRunningHeader(text) {
+  const t = (text || "").trim();
+  const m = t.match(/^\[(.+)\]$/);
+  if (!m) return false;
+  const inner = m[1].trim().replace(/[\u064B-\u065F\u0670]/g, "");
+  return RUNNING_HEADER_VARIANTS.includes(inner);
+}
+
+// PATCH #6 — Footer بحقل {PAGE} الحي
+/* PATCH #15 — نسخ عامة من دوال المعالجة ليراها كل المعالجات */
+async function applyGoldenSettings__global(blob) {
+  const zip = await JSZip.loadAsync(blob);
+  const settingsFile = zip.file("word/settings.xml");
+  if (!settingsFile) throw new Error("word/settings.xml غير موجود داخل DOCX");
+  let xml = await settingsFile.async("string");
+  xml = xml.replace(/(<w:compatSetting\b[^>]*\bw:name="compatibilityMode"[^>]*\bw:val=")15(")/, "$114$2");
+  xml = xml.replace(/<w:compatSetting\b([^>]*\bw:name="compatibilityMode"[^>]*)\/>/g,
+    m => m.replace(/\bw:val="[^"]*"/, 'w:val="14"'));
+  xml = xml.replace(/<w:defaultTabStop\b[^>]*\/>/g, "");
+  xml = xml.replace(/<w:characterSpacingControl\b[^>]*\/>/g, "");
+  xml = xml.replace(/<w:compat\b/,
+    '<w:defaultTabStop w:val="720"/>' +
+    '<w:characterSpacingControl w:val="doNotCompress"/>' +
+    '<w:compat');
+  xml = xml.replace(/<w:compat\b([^>]*)>/, m => m +
+    '<w:useFELayout/>' +
+    '<w:compatSetting w:name="overrideTableStyleFontSizeAndJustification" w:uri="http://schemas.microsoft.com/office/word" w:val="1"/>' +
+    '<w:compatSetting w:name="enableOpenTypeFeatures" w:uri="http://schemas.microsoft.com/office/word" w:val="1"/>' +
+    '<w:compatSetting w:name="doNotFlipMirrorIndents" w:uri="http://schemas.microsoft.com/office/word" w:val="1"/>');
+  zip.file("word/settings.xml", xml);
+  return await zip.generateAsync({type:"blob", mimeType:"application/vnd.openxmlformats-officedocument.wordprocessingml.document", compression:"DEFLATE", compressionOptions:{level:6}});
+}
+
+async function patchRunProps__global(blob) {
+  const zip = await JSZip.loadAsync(blob);
+  const docFile = zip.file("word/document.xml");
+  if (!docFile) return blob;
+  let xml = await docFile.async("string");
+  xml = xml.replace(/<w:szCs\b[^>]*\/>/g, "");
+  xml = xml.replace(/<w:bCs\b[^>]*\/>/g, "");
+  zip.file("word/document.xml", xml);
+  return await zip.generateAsync({type:"blob", mimeType:"application/vnd.openxmlformats-officedocument.wordprocessingml.document", compression:"DEFLATE", compressionOptions:{level:6}});
+}
+
+async function patchFooterField__global(blob) {
+  const zip = await JSZip.loadAsync(blob);
+  const names = Object.keys(zip.files).filter(n => /^word\/footer\d+\.xml$/.test(n));
+  for (const name of names) {
+    let xml = await zip.file(name).async("string");
+    if (xml.indexOf("{{PAGE}}") === -1) continue;
+    xml = xml.replace(/<w:r\b[^>]*>[\s\S]*?<\/w:r>/g, function (runXml) {
+      if (runXml.indexOf("{{PAGE}}") === -1) return runXml;
+      const rprMatch = runXml.match(/<w:rPr\b[^>]*>[\s\S]*?<\/w:rPr>/);
+      const rpr = rprMatch ? rprMatch[0] : "";
+      const textMatch = runXml.match(/<w:t[^>]*>([\s\S]*?)<\/w:t>/);
+      if (!textMatch) return runXml;
+      const fullText = textMatch[1];
+      const idx = fullText.indexOf("{{PAGE}}");
+      const before = fullText.slice(0, idx);
+      const after = fullText.slice(idx + "{{PAGE}}".length);
+      let out = "";
+      if (before) out += "<w:r>" + rpr + '<w:t xml:space="preserve">' + before + "</w:t></w:r>";
+      out += '<w:fldSimple w:instr=" PAGE "><w:r>' + rpr + "<w:t>1</w:t></w:r></w:fldSimple>";
+      if (after) out += "<w:r>" + rpr + '<w:t xml:space="preserve">' + after + "</w:t></w:r>";
+      return out;
+    });
+    zip.file(name, xml);
+  }
+  const settingsFile = zip.file("word/settings.xml");
+  if (settingsFile) {
+    let sx = await settingsFile.async("string");
+    sx = sx.replace(/<w:evenAndOddHeaders[^>]*\/>/g, "");
+    sx = sx.replace(/<w:evenAndOddHeaders[^>]*>[\s\S]*?<\/w:evenAndOddHeaders>/g, "");
+    zip.file("word/settings.xml", sx);
+  }
+  return await zip.generateAsync({type:"blob", mimeType:"application/vnd.openxmlformats-officedocument.wordprocessingml.document", compression:"DEFLATE", compressionOptions:{level:6}});
+}
+
+function footerForLive(vol) {
+  // PATCH #7 — نضع {{PAGE}} كعلامة مؤقتة داخل النص،
+  // ثم يستبدلها patchFooterField بحقل PAGE حقيقي في XML.
+  return new docx.Footer({
+    children: [
+      new docx.Paragraph({
+        bidirectional: true,
+        alignment: docx.AlignmentType.CENTER,
+        spacing: { before: 0, after: 0 },
+        children: [
+          new docx.TextRun({
+            text: `الجزء ${vol} | الصفحة {{PAGE}}`,
+            font: "Traditional Arabic",
+            rightToLeft: true,
+            size: 20
+          })
+        ]
+      })
+    ]
+  });
+}
+
+// PATCH #6 — Footer فارغ لصفحة الغلاف
+function emptyFooter() {
+  return new docx.Footer({
+    children: [new docx.Paragraph({ children: [] })]
+  });
+}
+
+// PATCH #6 — محتوى صفحة الغلاف
+function makeCoverChildren() {
+  return [
+    new docx.Paragraph({
+      bidirectional: true,
+      alignment: docx.AlignmentType.CENTER,
+      spacing: { before: 6000, after: 0, line: 240, lineRule: "auto" },
+      children: [
+        new docx.TextRun({
+          text: "هذه الصفحة كانت يجب أن تكون الغلاف",
+          font: "Traditional Arabic",
+          rightToLeft: true,
+          size: 32,
+          bold: true
+        })
+      ]
+    }),
+    new docx.Paragraph({
+      bidirectional: true,
+      alignment: docx.AlignmentType.CENTER,
+      spacing: { before: 400, after: 0, line: 240, lineRule: "auto" },
+      children: [
+        new docx.TextRun({
+          text: "وُضِعَتْ لأغراض الترقيم فقط",
+          font: "Traditional Arabic",
+          rightToLeft: true,
+          size: 28,
+          bold: true
+        })
+      ]
+    })
+  ];
+}
+
 function footerFor(vol, page) {
   return new docx.Footer({
     children: [
@@ -370,7 +522,13 @@ document.getElementById("make").onclick = async () => {
     for (let i = 0; i < pages.length; i++) {
       const page = pages[i];
 
-      let blocks = page.blocks;
+      let blocks = page.blocks || [];
+
+      // PATCH #6 — حذف الـrunning header من كل الصفحات
+      // إلا الصفحة المصدرية الأولى (i === 0).
+      if (i > 0) {
+        blocks = blocks.filter(b => !isRunningHeader(b.text));
+      }
 
       if (!blocks.length) {
         blocks = [{
@@ -389,41 +547,45 @@ document.getElementById("make").onclick = async () => {
       }
     }
 
-    const sections = [{
-      properties: {
-        page: {
-          size: {
-            width: 11906,
-            height: 16838
-          },
-
-          margin: {
-            top: 794,       // 14 mm
-            bottom: 794,    // 14 mm
-            left: 907,      // 16 mm
-            right: 907,     // 16 mm
-            footer: 283     // 5 mm
-          }
+    const sectionProps = {
+      page: {
+        size: {
+          width: 11906,
+          height: 16838
+        },
+        margin: {
+          top: 794,
+          bottom: 794,
+          left: 907,
+          right: 907,
+          footer: 283
         }
-      },
+      }
+    };
 
-      /*
-        مؤقت في اختبار الـ50:
-        كلها من الجزء الأول.
-
-        نستخدم footer واحدًا للقسم.
-        لاحقًا في النسخة الكاملة سننشئ
-        Section واحدًا لكل جزء ونستخدم PAGE field.
-      */
+    // PATCH #6 — قسم الغلاف (صفحة Word 1)
+    const coverSection = {
+      properties: sectionProps,
       footers: {
-        default: footerFor(
-          pages[0].meta.vol,
-          pages[0].meta.page
-        )
+        default: emptyFooter(),
+        even: emptyFooter(),
+        first: emptyFooter()
       },
+      children: makeCoverChildren()
+    };
 
+    // PATCH #6 — قسم المصدر مع Footer حي بحقل {PAGE}
+    const sourceSection = {
+      properties: sectionProps,
+      footers: {
+        default: footerForLive(pages[0].meta.vol),
+        even: footerForLive(pages[0].meta.vol),
+        first: footerForLive(pages[0].meta.vol)
+      },
       children: allChildren
-    }];
+    };
+
+    const sections = [coverSection, sourceSection];
 
     // PATCH #4 — match Golden python-docx settings.xml
     //
@@ -529,8 +691,99 @@ document.getElementById("make").onclick = async () => {
       });
     }
 
+    // PATCH #5 — إزالة w:szCs و w:bCs من document.xml
+    // Golden (python-docx) لا يكتبهما إطلاقًا،
+    // و docx.js يضيفهما تلقائيًا عند rightToLeft: true،
+    // فيتغير قياس النص العربي في Word ويفيض السطر.
+    // PATCH #7 — استبدال {{PAGE}} بحقل PAGE حقيقي داخل footer*.xml
+async function patchFooterField(blob) {
+  const zip = await JSZip.loadAsync(blob);
+
+  const names = Object.keys(zip.files).filter(
+    (n) => /^word\/footer\d+\.xml$/.test(n)
+  );
+
+  for (const name of names) {
+    let xml = await zip.file(name).async("string");
+    if (xml.indexOf("{{PAGE}}") === -1) continue;
+
+    xml = xml.replace(/<w:r\b[^>]*>[\s\S]*?<\/w:r>/g, function (runXml) {
+      if (runXml.indexOf("{{PAGE}}") === -1) return runXml;
+
+      const rprMatch = runXml.match(/<w:rPr\b[^>]*>[\s\S]*?<\/w:rPr>/);
+      const rpr = rprMatch ? rprMatch[0] : "";
+
+      const textMatch = runXml.match(/<w:t[^>]*>([\s\S]*?)<\/w:t>/);
+      if (!textMatch) return runXml;
+      const fullText = textMatch[1];
+
+      const idx = fullText.indexOf("{{PAGE}}");
+      const before = fullText.slice(0, idx);
+      const after = fullText.slice(idx + "{{PAGE}}".length);
+
+      let out = "";
+      if (before) {
+        out +=
+          "<w:r>" + rpr +
+          '<w:t xml:space="preserve">' + before + "</w:t>" +
+          "</w:r>";
+      }
+      out +=
+        '<w:fldSimple w:instr=" PAGE ">' +
+        "<w:r>" + rpr + "<w:t>1</w:t></w:r>" +
+        "</w:fldSimple>";
+      if (after) {
+        out +=
+          "<w:r>" + rpr +
+          '<w:t xml:space="preserve">' + after + "</w:t>" +
+          "</w:r>";
+      }
+      return out;
+    });
+
+    zip.file(name, xml);
+  }
+
+  // PATCH #8 — حذف evenAndOddHeaders من settings.xml
+  // حتى لا تفقد الصفحات الزوجية الـFooter.
+  const settingsFile = zip.file("word/settings.xml");
+  if (settingsFile) {
+    let sx = await settingsFile.async("string");
+    sx = sx.replace(/<w:evenAndOddHeaders[^>]*\/>/g, "");
+    sx = sx.replace(/<w:evenAndOddHeaders[^>]*>[\s\S]*?<\/w:evenAndOddHeaders>/g, "");
+    zip.file("word/settings.xml", sx);
+  }
+
+  return await zip.generateAsync({
+    type: "blob",
+    mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    compression: "DEFLATE",
+    compressionOptions: { level: 6 }
+  });
+}
+
+async function patchRunProps(blob) {
+      const zip = await JSZip.loadAsync(blob);
+      const docFile = zip.file("word/document.xml");
+      if (!docFile) return blob;
+      let xml = await docFile.async("string");
+      const szCsCount = (xml.match(/<w:szCs\b[^>]*\/>/g) || []).length;
+      const bCsCount  = (xml.match(/<w:bCs\b[^>]*\/>/g) || []).length;
+      xml = xml.replace(/<w:szCs\b[^>]*\/>/g, "");
+      xml = xml.replace(/<w:bCs\b[^>]*\/>/g, "");
+      zip.file("word/document.xml", xml);
+      console.log("[patch5] removed szCs=" + szCsCount + " bCs=" + bCsCount);
+      return await zip.generateAsync({
+        type: "blob",
+        mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        compression: "DEFLATE",
+        compressionOptions: { level: 6 }
+      });
+    }
+
     const documentFile =
       new docx.Document({
+        evenAndOddHeaderAndFooters: false,
         sections
       });
 
@@ -540,8 +793,14 @@ document.getElementById("make").onclick = async () => {
     const rawBlob =
       await docx.Packer.toBlob(documentFile);
 
-    const blob =
+    const settingsBlob =
       await applyGoldenSettings(rawBlob);
+
+    const intermediate =
+      await patchRunProps(settingsBlob);
+
+    const blob =
+      await patchFooterField(intermediate);
 
     const url =
       URL.createObjectURL(blob);
@@ -586,6 +845,393 @@ document.getElementById("make").onclick = async () => {
       error.name +
       ": " +
       error.message;
+  }
+};
+
+// PATCH #9 — الكتاب الكامل (2236 صفحة، 7 أقسام)
+const FULL_BOOK_PAGES = 2236;
+const FULL_BATCH_SIZE = 40;
+
+async function fetchBatch(bookId, from, to, retries) {
+  const url = `/api/book/${bookId}/pages?from=${from}&to=${to}`;
+  let lastErr = null;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const res = await fetch(url);
+      if (res.status === 404) {
+        // PATCH #16 — بعض الصفحات غير موجودة (front matter) → نتجاوزها
+        return { pages: [] };
+      }
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}`);
+      }
+      return await res.json();
+    } catch (e) {
+      lastErr = e;
+      const wait = Math.min(8000, 1000 * (2 ** attempt));
+      await new Promise(r => setTimeout(r, wait));
+    }
+  }
+  throw new Error(`فشل جلب ${from}..${to} بعد ${retries + 1} محاولات: ${lastErr && lastErr.message}`);
+}
+
+const FULL_CONCURRENT_BATCHES = 1;
+
+async function loadAllPages(bookId, total, onProgress) {
+  // PATCH #11 — 4 دُفعات متوازية، كل واحدة 40 صفحة،
+  //      = 160 صفحة في كل جولة (بدل 40).
+  const all = new Array(total);
+  let completed = 0;
+
+  const ranges = [];
+  for (let from = 1; from <= total; from += FULL_BATCH_SIZE) {
+    const to = Math.min(from + FULL_BATCH_SIZE - 1, total);
+    ranges.push({ from, to });
+  }
+
+  let cursor = 0;
+  async function worker() {
+    while (true) {
+      const idx = cursor++;
+      if (idx >= ranges.length) return;
+      let { from, to } = ranges[idx];
+      const batchStart = Date.now();
+      let data = null;
+      try {
+        data = await fetchBatch(bookId, from, to, 2);
+      } catch (e) {
+        if (to - from + 1 <= 5) throw e;
+        const mid = from + Math.floor((to - from) / 2);
+        data = await fetchBatch(bookId, from, mid, 3);
+        to = mid;
+      }
+      for (let k = 0; k < data.pages.length; k++) {
+        all[from - 1 + k] = parsePage(data.pages[k]);
+      }
+      completed += data.pages.length;
+      const elapsed = ((Date.now() - batchStart) / 1000).toFixed(1);
+      if (onProgress) onProgress(completed, total, elapsed);
+    }
+  }
+
+  await Promise.all(
+    Array.from({ length: FULL_CONCURRENT_BATCHES }, () => worker())
+  );
+
+  return all.filter(function (p) {
+    return p && p.meta && p.meta.vol !== undefined && p.meta.vol !== null;
+  });
+}
+
+// PATCH #16 — تحويل الأرقام العربية/الفارسية إلى غربية
+function toWesternDigits(s) {
+  return String(s).replace(/[٠-٩۰-۹]/g, function (d) {
+    const map = {"٠":"0","١":"1","٢":"2","٣":"3","٤":"4","٥":"5","٦":"6","٧":"7","٨":"8","٩":"9","۰":"0","۱":"1","۲":"2","۳":"3","۴":"4","۵":"5","۶":"6","۷":"7","۸":"8","۹":"9"};
+    return map[d] || d;
+  });
+}
+
+// PATCH #16 — استخراج المؤلف من نص meta.info
+function extractAuthor(meta) {
+  if (!meta || !meta.info) return "";
+  const m = String(meta.info).match(/المؤلف\s*[:：]\s*([^\n]+)/);
+  if (m) return m[1].trim();
+  return "";
+}
+
+// PATCH #14 — دوال مساعدة لجلب metadata وصفحة عنوان
+async function getBookInfo(bookId) {
+  const res = await fetch(`/api/book/${bookId}`);
+  if (!res.ok) throw new Error(`فشل جلب معلومات الكتاب: HTTP ${res.status}`);
+  return await res.json();
+}
+
+function extractTotalPages(info) {
+  // PATCH #17 — جمع صفحات كل الأجزاء (كان يأخذ أعلى رقم فقط)
+  const meta = info.meta || info;
+
+  console.log("[extractTotalPages] meta.name =", meta.name);
+
+  // PATCH #20 — الأولوية لـ page_map / print_pg_to_pg على meta.info
+  // (meta.info يعطي عدد صفحات PDF الأصلي، ليس عدد الصفحات المتاحة فعليًا)
+
+  // 1) page_map.length — الأكثر موثوقية
+  if (info.indexes && Array.isArray(info.indexes.page_map) &&
+      info.indexes.page_map.length > 0) {
+    console.log("[extractTotalPages] from page_map.length =",
+      info.indexes.page_map.length);
+    return info.indexes.page_map.length;
+  }
+
+  // 2) عدد مفاتيح print_pg_to_pg = عدد الصفحات المتاحة
+  if (info.indexes && info.indexes.print_pg_to_pg &&
+      typeof info.indexes.print_pg_to_pg === "object") {
+    const keys = Object.keys(info.indexes.print_pg_to_pg);
+    if (keys.length > 0) {
+      console.log("[extractTotalPages] from print_pg_to_pg key count =",
+        keys.length);
+      return keys.length;
+    }
+  }
+
+  // 3) meta.info — احتياطي (PDF الأصلي)
+  if (meta.info) {
+    const m = String(meta.info).match(
+      /عدد\s*الصفحات\s*[:：]\s*([٠-٩۰-۹0-9]+)/
+    );
+    if (m) {
+      const n = parseInt(toWesternDigits(m[1]), 10);
+      if (n > 0 && n < 100000) {
+        console.log("[extractTotalPages] from meta.info (fallback) =", n);
+        return n;
+      }
+    }
+  }
+
+  // 2) جمع أقصى صفحة مطبوعة في كل جزء من print_pg_to_pg
+  if (info.indexes && info.indexes.print_pg_to_pg &&
+      typeof info.indexes.print_pg_to_pg === "object") {
+    const perVol = {};
+    for (const k of Object.keys(info.indexes.print_pg_to_pg)) {
+      const parts = String(k).split(",");
+      if (parts.length < 2) continue;
+      const vol = parts[0];
+      const p = Number(parts[parts.length - 1]);
+      if (!Number.isFinite(p) || p <= 0) continue;
+      if (!perVol[vol] || p > perVol[vol]) perVol[vol] = p;
+    }
+    const vols = Object.keys(perVol);
+    if (vols.length > 0) {
+      let sum = 0;
+      for (const v of vols) sum += perVol[v];
+      const detail = vols.map(v => "v" + v + "=" + perVol[v]).join(" ");
+      console.log("[extractTotalPages] per-volume maxes: " + detail);
+      console.log("[extractTotalPages] SUM across " + vols.length + " volumes = " + sum);
+      if (sum > 0 && sum < 100000) return sum;
+    }
+  }
+
+  // 3) طول page_map
+  if (info.indexes && Array.isArray(info.indexes.page_map) &&
+      info.indexes.page_map.length > 0) {
+    console.log("[extractTotalPages] from page_map.length =", info.indexes.page_map.length);
+    return info.indexes.page_map.length;
+  }
+
+  // 4) أعلى صفحة في headings
+  if (info.indexes && Array.isArray(info.indexes.headings)) {
+    let max = 0;
+    for (const h of info.indexes.headings) {
+      const p = Number(h.page || 0);
+      if (p > max) max = p;
+    }
+    if (max > 0 && max < 100000) return max;
+  }
+
+  // 5) حقول رقمية مباشرة
+  const WANT = ["pages_count","page_count","num_pages","total_pages",
+                "pages_total","totalPages","pageCount","pagesNum"];
+  for (const k of WANT) {
+    const v = meta[k];
+    if (typeof v === "number" && v > 0 && v < 100000) return v;
+  }
+
+  console.warn("[extractTotalPages] FAILED");
+  return null;
+}
+
+function makeTitlePage(opts) {
+  const lines = [];
+  lines.push({ text: opts.bookName, size: 36, bold: true, before: 3600 });
+  if (opts.authorName) {
+    lines.push({ text: "المؤلف: " + opts.authorName, size: 26, bold: false, before: 800 });
+  }
+  lines.push({ text: opts.totalPages + " صفحة مصدرية", size: 22, bold: false, before: 1600 });
+  lines.push({ text: "المصدر: تراث (app.turath.io/book/" + opts.bookId + ")", size: 18, bold: false, before: 600 });
+  lines.push({ text: "نسخة 1:1 عن الطبعة الأصلية", size: 18, bold: false, before: 400 });
+
+  return lines.map(function (line) {
+    return new docx.Paragraph({
+      bidirectional: true,
+      alignment: docx.AlignmentType.CENTER,
+      spacing: { before: line.before, after: 0, line: 240, lineRule: "auto" },
+      children: [new docx.TextRun({
+        text: line.text,
+        font: "Traditional Arabic",
+        rightToLeft: true,
+        size: line.size,
+        bold: line.bold
+      })]
+    });
+  });
+}
+
+document.getElementById("makeFull").onclick = async () => {
+  try {
+    const bookId = getBookId();
+
+    statusEl.textContent = "جلب معلومات الكتاب...";
+    const info = await getBookInfo(bookId);
+    console.log("[makeFull] info keys:", Object.keys(info));
+    const meta = info.meta || info;
+    const total = extractTotalPages(info);
+    if (!total) throw new Error("لم أستطع استخراج عدد الصفحات من metadata");
+    const bookName = meta.name || meta.book_name || ("book-" + bookId);
+    const authorName = extractAuthor(meta);
+
+    window.__fullStart = Date.now();
+    statusEl.textContent = bookName + " — " + total + " صفحة — بدء الجلب...";
+
+    const pages = await loadAllPages(
+      bookId,
+      total,
+      (done, total, elapsed) => {
+        const rate = elapsed > 0 ? (done / (Date.now() - window.__fullStart) * 1000).toFixed(1) : "?";
+        statusEl.textContent =
+          `جُلبت ${done} / ${total} صفحة
+` +
+          `السرعة: ${rate} صفحة/ثانية`;
+      }
+    );
+
+    statusEl.textContent = "تجميع الصفحات حسب الجزء...";
+
+    const byVolume = new Map();
+    for (const p of pages) {
+      const v = String(p.meta.vol);
+      if (!byVolume.has(v)) byVolume.set(v, []);
+      byVolume.get(v).push(p);
+    }
+
+    const volumeKeys = Array.from(byVolume.keys()).sort(
+      (a, b) => Number(a) - Number(b)
+    );
+
+    for (const v of volumeKeys) {
+      const vp = byVolume.get(v);
+      console.log(
+        "[makeFull] vol " + v + ": " + vp.length +
+        " pages, first printed = " + vp[0].meta.page
+      );
+    }
+
+    const sectionProps = {
+      page: {
+        size: { width: 11906, height: 16838 },
+        margin: {
+          top: 794, bottom: 794,
+          left: 907, right: 907,
+          footer: 283
+        }
+      }
+    };
+
+    const sections = [];
+
+    // غلاف (PATCH #14 — صفحة عنوان ديناميكية)
+    sections.push({
+      properties: sectionProps,
+      footers: {
+        default: emptyFooter(),
+        even: emptyFooter(),
+        first: emptyFooter()
+      },
+      children: makeTitlePage({
+        bookName: bookName,
+        authorName: authorName,
+        totalPages: total,
+        bookId: bookId
+      })
+    });
+
+    // قسم لكل جزء
+    for (const vol of volumeKeys) {
+      const volPages = byVolume.get(vol);
+      const children = [];
+
+      for (let i = 0; i < volPages.length; i++) {
+        const page = volPages[i];
+        let blocks = page.blocks || [];
+
+        if (i > 0) {
+          blocks = blocks.filter(b => !isRunningHeader(b.text));
+        }
+        if (!blocks.length) {
+          blocks = [{ type: "paragraph", text: "" }];
+        }
+
+        for (let j = 0; j < blocks.length; j++) {
+          const isSectionStart = (i === 0 && j === 0);
+          const isPageStart = (j === 0);
+          children.push(
+            makeParagraph(
+              blocks[j],
+              isPageStart && !isSectionStart
+            )
+          );
+        }
+      }
+
+      const firstPrintedPage = Number(volPages[0].meta.page) || 1;
+
+      sections.push({
+        properties: {
+          ...sectionProps,
+          page: {
+            ...sectionProps.page,
+            pageNumbers: { start: firstPrintedPage }
+          }
+        },
+        footers: {
+          default: footerForLive(vol),
+          even: footerForLive(vol),
+          first: footerForLive(vol)
+        },
+        children
+      });
+    }
+
+    statusEl.textContent =
+      "توليد DOCX (قد يستغرق 30-90 ثانية)...";
+
+    const documentFile = new docx.Document({
+      evenAndOddHeaderAndFooters: false,
+      sections
+    });
+
+    const rawBlob = await docx.Packer.toBlob(documentFile);
+
+    statusEl.textContent = "تطبيق إعدادات Golden...";
+    const settingsBlob = await applyGoldenSettings__global(rawBlob);
+    const intermediate = await patchRunProps__global(settingsBlob);
+
+    statusEl.textContent = "إدراج حقول PAGE...";
+    const blob = await patchFooterField__global(intermediate);
+
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    const safeName = (pages[0]?.meta?.book_name || ("book-" + bookId))
+      .replace(/[\\/:*?"<>|]/g, "-");
+
+    a.href = url;
+    a.download = safeName + "-1to1-FULL.docx";
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+
+    const totalParagraphs = pages.reduce(
+      (n, p) => n + (p.blocks ? p.blocks.length : 0), 0
+    );
+
+    statusEl.textContent =
+      "✓ تم إنشاء الكتاب كاملًا\n" +
+      "الوضع: 1:1\n" +
+      "الصفحات المصدرية: " + pages.length + "\n" +
+      "الأقسام (الغلاف + الأجزاء): " + sections.length + "\n" +
+      "الفقرات: " + totalParagraphs + "\n" +
+      "الحجم: " + (blob.size / 1024 / 1024).toFixed(2) + " MB";
+  } catch (error) {
+    console.error(error);
+    statusEl.textContent = "❌ فشل\n\n" + error.name + ": " + error.message;
   }
 };
 
@@ -658,8 +1304,14 @@ document.getElementById("diagnose").onclick = async () => {
       const rawBlob =
         await docx.Packer.toBlob(d);
 
+      const settingsBlob =
+        await applyGoldenSettings__global(rawBlob);
+
+      const intermediate =
+        await patchRunProps__global(settingsBlob);
+
       const blob =
-        await removeDocGrid(rawBlob);
+        await patchFooterField__global(intermediate);
 
       const bytes =
         await blob.arrayBuffer();
