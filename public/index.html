@@ -68,236 +68,161 @@ const statusEl = document.getElementById("status");
 const PAGE_COUNT = 50;
 
 function getBookId() {
-  const value =
-    document.getElementById("bookUrl").value.trim();
-
-  const match = value.match(/\/book\/(\d+)/);
-
-  if (match) return Number(match[1]);
-
+  const value = document.getElementById("bookUrl").value.trim();
+  const m = value.match(/\/book\/(\d+)/);
+  if (m) return Number(m[1]);
   if (/^\d+$/.test(value)) return Number(value);
-
-  throw new Error("رابط تراث غير صالح.");
+  throw new Error("رابط تراث غير صالح");
 }
 
 function cleanText(text) {
-  return text
+  return String(text || "")
     .replace(/\u00A0/g, " ")
     .replace(/[ \t]+/g, " ")
-    .replace(/\n[ \t]+/g, "\n")
-    .replace(/[ \t]+\n/g, "\n")
+    .replace(/[ \t]*\n[ \t]*/g, "\n")
     .trim();
 }
 
-/* خطوط زخرفية/فواصل لا نريدها فقرات */
 function isJunk(text) {
   const t = cleanText(text);
-
   if (!t) return true;
+  if (t === "." || t === "ـ" || t === "ــ") return true;
+  return /^[.\-ـ…•·_*=\s]{2,}$/.test(t);
+}
 
-  if (/^[.\-ـ…•·_*=\s]{2,}$/.test(t)) {
-    return true;
+function isNumberPrefix(text) {
+  return /^[0-9٠-٩]+[\s\-–—ـ]*$/.test(cleanText(text));
+}
+
+function isStructuralPrefix(text) {
+  let t = cleanText(text);
+  if (!t || t.length > 60) return false;
+
+  t = t.replace(/^[\s:؛،,.\-ـ]+|[\s:؛،,.\-ـ]+$/g, "");
+
+  return t.length >= 3 &&
+         t.startsWith("(") &&
+         t.endsWith(")");
+}
+
+/* نفس قاعدة Golden التي أصلحت الصفحة الكثيفة */
+function smartMerge(blocks) {
+  const out = [];
+  let i = 0;
+
+  while (i < blocks.length) {
+    const current = blocks[i];
+    const text = cleanText(current.text);
+
+    if (
+      current.type !== "heading" &&
+      isNumberPrefix(text) &&
+      i + 2 < blocks.length &&
+      blocks[i + 1].type !== "heading" &&
+      isStructuralPrefix(blocks[i + 1].text)
+    ) {
+      out.push({
+        type: "paragraph",
+        text:
+          text + " " +
+          cleanText(blocks[i + 1].text) + " " +
+          cleanText(blocks[i + 2].text)
+      });
+
+      i += 3;
+      continue;
+    }
+
+    if (
+      current.type !== "heading" &&
+      isStructuralPrefix(text) &&
+      i + 1 < blocks.length
+    ) {
+      out.push({
+        type: "paragraph",
+        text: text + " " + cleanText(blocks[i + 1].text)
+      });
+
+      i += 2;
+      continue;
+    }
+
+    out.push(current);
+    i++;
   }
 
-  return t === "." || t === "ــ" || t === "ـ";
+  return out;
 }
 
 /*
-  نعزل النص العربي اتجاهيًا.
-  RLI = Right-to-Left Isolate
-  PDI = Pop Directional Isolate
-
-  هذا مهم خصوصًا عند الأقواس والأرقام.
+  API تراث يعطينا HTML خفيفًا.
+  نحافظ على title كعنوان، وما بين العناوين كنص.
+  والأهم: لا نلحم صفحتين مختلفتين أبدًا.
 */
-function rtlIsolate(text) {
-  return "\u2067" + text + "\u2069";
-}
-
-function arabicRun(text, options = {}) {
-  return new docx.TextRun({
-    text: rtlIsolate(text),
-    font: "Traditional Arabic",
-    rightToLeft: true,
-    ...options
-  });
-}
-
-function normalParagraph(text) {
-  return new docx.Paragraph({
-    bidirectional: true,
-    alignment: docx.AlignmentType.JUSTIFIED,
-
-    spacing: {
-      line: 360,
-      after: 120
-    },
-
-    children: [
-      arabicRun(text, {
-        size: 30
-      })
-    ]
-  });
-}
-
-function headingParagraph(text, level = 2) {
-  let size = 32;
-
-  if (level === 1) {
-    size = 38;
-  } else if (level === 2) {
-    size = 34;
-  } else if (level === 3) {
-    size = 32;
-  } else {
-    size = 30;
-  }
-
-  return new docx.Paragraph({
-    bidirectional: true,
-    alignment: docx.AlignmentType.CENTER,
-
-    spacing: {
-      before: 240,
-      after: 160
-    },
-
-    keepNext: true,
-
-    children: [
-      arabicRun(text, {
-        bold: true,
-        size
-      })
-    ]
-  });
-}
-
-/*
-  بدل خلط:
-  "الجزء 1 — ص 2"
-  في TextRun واحد، نفصل المكونات.
-*/
-function pageMarker(vol, page) {
-  return new docx.Paragraph({
-    bidirectional: true,
-    alignment: docx.AlignmentType.CENTER,
-
-    spacing: {
-      before: 80,
-      after: 80
-    },
-
-    children: [
-      arabicRun("﴿ الجزء ", {
-        size: 20,
-        italics: true
-      }),
-
-      new docx.TextRun({
-        text: String(vol),
-        font: "Traditional Arabic",
-        size: 20,
-        italics: true
-      }),
-
-      arabicRun(" — ص ", {
-        size: 20,
-        italics: true
-      }),
-
-      new docx.TextRun({
-        text: String(page),
-        font: "Traditional Arabic",
-        size: 20,
-        italics: true
-      }),
-
-      arabicRun(" ﴾", {
-        size: 20,
-        italics: true
-      })
-    ]
-  });
-}
-
-function parsePage(pageData) {
+function parsePage(raw) {
   const meta =
-    typeof pageData.meta === "string"
-      ? JSON.parse(pageData.meta)
-      : pageData.meta;
+    typeof raw.meta === "string"
+      ? JSON.parse(raw.meta)
+      : raw.meta;
 
   const parser = new DOMParser();
 
-  const parsed = parser.parseFromString(
-    `<div id="root">${pageData.text}</div>`,
+  const dom = parser.parseFromString(
+    `<div id="root">${raw.text || ""}</div>`,
     "text/html"
   );
 
-  const root = parsed.getElementById("root");
-  const result = [];
-
+  const root = dom.getElementById("root");
+  const blocks = [];
   let buffer = "";
 
-  function flushBuffer() {
+  function flush() {
     const text = cleanText(buffer);
-
-    if (!isJunk(text)) {
-      result.push({
-        type: "text",
-        text
-      });
-    }
-
     buffer = "";
-  }
-
-  function addTitle(text, level = 2) {
-    text = cleanText(text);
 
     if (!isJunk(text)) {
-      result.push({
-        type: "title",
-        text,
-        level
-      });
+      /*
+        نحافظ على أسطر المصدر كفقرات عندما تكون موجودة،
+        بدل فقرة عملاقة واحدة.
+      */
+      const parts = text
+        .split(/\n+/)
+        .map(cleanText)
+        .filter(x => !isJunk(x));
+
+      for (const part of parts) {
+        blocks.push({
+          type: "paragraph",
+          text: part
+        });
+      }
     }
   }
 
   function walk(node) {
     if (node.nodeType === Node.TEXT_NODE) {
-      buffer += node.textContent;
+      buffer += node.textContent || "";
       return;
     }
 
-    if (node.nodeType !== Node.ELEMENT_NODE) {
-      return;
-    }
+    if (node.nodeType !== Node.ELEMENT_NODE) return;
 
     const tag = node.tagName.toLowerCase();
 
-    /*
-      عنوان صريح من بنية المصدر.
-    */
-    if (/^h[1-6]$/.test(tag)) {
-      flushBuffer();
+    if (
+      /^h[1-6]$/.test(tag) ||
+      node.getAttribute("data-type") === "title"
+    ) {
+      flush();
 
-      addTitle(
-        node.textContent,
-        Number(tag.substring(1))
-      );
+      const text = cleanText(node.textContent);
 
-      return;
-    }
-
-    /*
-      تراث يستخدم data-type="title".
-      نحفظه عنوانًا، ثم تزيل مرحلة بناء الكتاب
-      رؤوس الصفحات المتكررة فقط.
-    */
-    if (node.dataset?.type === "title") {
-      flushBuffer();
-      addTitle(node.textContent, 2);
+      if (!isJunk(text)) {
+        blocks.push({
+          type: "heading",
+          text
+        });
+      }
       return;
     }
 
@@ -306,417 +231,185 @@ function parsePage(pageData) {
       return;
     }
 
-    /*
-      لا نحذف أرقامًا أو رموزًا من النص.
-      نحافظ على ألفاظ المصدر كما هي.
-    */
     for (const child of node.childNodes) {
       walk(child);
     }
   }
 
-  for (const node of root.childNodes) {
-    walk(node);
+  for (const child of root.childNodes) {
+    walk(child);
   }
 
-  flushBuffer();
+  flush();
 
   return {
     meta,
-    blocks: result
+    blocks: smartMerge(blocks)
   };
 }
 
-async function loadPages(count, bookId) {
-  statusEl.textContent =
-    `جلب ${count} صفحة من تراث...`;
+async function loadPages(bookId, count) {
+  statusEl.textContent = `جلب ${count} صفحة من تراث...`;
 
-  const response = await fetch(
+  const r = await fetch(
     `/api/book/${bookId}/pages?from=1&to=${count}`
   );
 
-  if (!response.ok) {
-    let message = `HTTP ${response.status}`;
-    try {
-      const e = await response.json();
-      if (e.error) message += ` — ${e.error}`;
-    } catch {}
-    throw new Error(message);
+  if (!r.ok) {
+    throw new Error(`HTTP ${r.status}`);
   }
 
-  const data = await response.json();
+  const data = await r.json();
 
-  if (!Array.isArray(data.pages) || data.pages.length !== count) {
+  if (!Array.isArray(data.pages) ||
+      data.pages.length !== count) {
     throw new Error(
-      `وصلت ${data.pages?.length ?? 0} صفحة بدل ${count}`
+      `وصلت ${data.pages?.length || 0} صفحة بدل ${count}`
     );
   }
 
   return data.pages.map(parsePage);
 }
 
-/*
-  المرحلة الأهم في v2:
-
-  لا نعتبر نهاية صفحة تراث نهاية فقرة.
-  نحول الكتاب كله إلى stream من العناصر.
-
-  العنوان يفصل الفقرة حتمًا.
-  أما text في الصفحة التالية فيُلحق بالنص السابق.
-*/
-/*
-  Parser v3
-
-  الفكرة:
-  - حذف رؤوس الصفحات المتكررة، لا العنوان الحقيقي الأول.
-  - عدم اعتبار نهاية الصفحة نهاية فقرة.
-  - حفظ موضع انتقال الصفحة داخل الفقرة نفسها.
-  - عدم تغيير ألفاظ الكتاب.
-*/
-
-function normalizedTitle(text) {
-  return cleanText(text)
-    .replace(/[\[\]﴿﴾()（）]/g, "")
-    .replace(/[ـ\s]+/g, "")
-    .trim();
-}
-
-function isRunningHeader(text, pageIndex) {
-  const t = normalizedTitle(text);
-
-  /*
-    في المنتقى يظهر اسم الكتاب في رأس الصفحات.
-    نُبقي أول ظهور له فقط، ونحذف التكرارات التالية.
-  */
-  if (pageIndex > 0 && t === "المنتقى") {
-    return true;
-  }
-
-  return false;
-}
-
-function buildBookBlocks(pages) {
-  const output = [];
-
-  function normalizeTitle(text) {
-    return cleanText(text)
-      .replace(/[\[\]﴿﴾()（）]/g, "")
-      .replace(/[ـ\s]+/g, "")
-      .trim();
-  }
-
-  /*
-    رؤوس صفحات متكررة معروفة من هذا الكتاب.
-
-    مهم:
-    أول ظهور لا نحذفه؛ لأنه جزء من افتتاح الكتاب.
-  */
-  const seenRunningHeaders = new Set();
-
-  function isRunningHeader(block, pageIndex) {
-    if (block.type !== "title") {
-      return false;
-    }
-
-    const title = normalizeTitle(block.text);
-
-    if (title === "المنتقى") {
-      if (!seenRunningHeaders.has(title)) {
-        seenRunningHeaders.add(title);
-        return false;
-      }
-
-      return pageIndex > 0;
-    }
-
-    return false;
-  }
-
-  for (
-    let pageIndex = 0;
-    pageIndex < pages.length;
-    pageIndex++
-  ) {
-    const page = pages[pageIndex];
-
-    const cleaned = page.blocks.filter(
-      block => !isRunningHeader(block, pageIndex)
-    );
-
-    if (cleaned.length === 0) {
-      continue;
-    }
-
-    /*
-      هل أول محتوى في الصفحة نص؟
-      إذا كان آخر محتوى سابق نصًا، فالأصل غالبًا
-      فقرة قطعتها الصفحة المطبوعة.
-    */
-    const first = cleaned[0];
-
-    if (
-      first.type === "text" &&
-      output.length > 0 &&
-      output[output.length - 1].type === "text"
-    ) {
-      const previous = output[output.length - 1];
-
-      if (!previous.parts) {
-        previous.parts = [
-          {
-            type: "text",
-            text: previous.text
-          }
-        ];
-
-        delete previous.text;
-      }
-
-      /*
-        نحفظ موضع الصفحة داخل الفقرة نفسها.
-      */
-      previous.parts.push({
-        type: "page",
-        vol: page.meta.vol,
-        page: page.meta.page
-      });
-
-      previous.parts.push({
-        type: "text",
-        text: first.text
-      });
-
-      cleaned.shift();
-    }
-
-    else {
-      /*
-        الصفحة بدأت بعنوان أو لم يكن قبلها نص.
-        هنا يمكن أن تكون علامة الصفحة مستقلة.
-      */
-      output.push({
-        type: "page",
-        vol: page.meta.vol,
-        page: page.meta.page
-      });
-    }
-
-    for (const block of cleaned) {
-      if (block.type === "title") {
-        output.push({
-          type: "title",
-          text: block.text,
-          level: block.level || 2
-        });
-
-        continue;
-      }
-
-      if (block.type === "text") {
-        output.push({
-          type: "text",
-          text: block.text
-        });
-      }
-    }
-  }
-
-  return output;
-}
-
-/*
-  علامة صفحة صغيرة داخل الفقرة.
-  لا تكسر الجملة ولا تنشئ فقرة جديدة.
-*/
-function inlinePageRuns(vol, page) {
-  return [
-    arabicRun(" ﴿", {
-      size: 18,
-      italics: true
-    }),
-
-    arabicRun("ج", {
-      size: 18,
-      italics: true
-    }),
-
-    new docx.TextRun({
-      text: String(vol),
-      font: "Traditional Arabic",
-      size: 18,
-      italics: true
-    }),
-
-    arabicRun(" ص", {
-      size: 18,
-      italics: true
-    }),
-
-    new docx.TextRun({
-      text: String(page),
-      font: "Traditional Arabic",
-      size: 18,
-      italics: true
-    }),
-
-    arabicRun("﴾ ", {
-      size: 18,
-      italics: true
-    })
-  ];
-}
-
-function richNormalParagraph(block) {
-  /*
-    فقرة عادية لم تعبر حد صفحة.
-  */
-  if (!block.parts) {
-    return normalParagraph(block.text);
-  }
-
-  const runs = [];
-
-  for (const part of block.parts) {
-    if (part.type === "text") {
-      runs.push(
-        arabicRun(part.text, {
-          size: 30
-        })
-      );
-    }
-
-    else if (part.type === "page") {
-      runs.push(
-        ...inlinePageRuns(
-          part.vol,
-          part.page
-        )
-      );
-    }
-  }
-
-  return new docx.Paragraph({
-    bidirectional: true,
-    alignment: docx.AlignmentType.JUSTIFIED,
-
-    spacing: {
-      line: 360,
-      after: 120
-    },
-
-    children: runs
+function makeRun(text, heading = false) {
+  return new docx.TextRun({
+    text,
+    font: "Traditional Arabic",
+    rightToLeft: true,
+    size: heading ? 34 : 28,   // 17pt / 14pt
+    bold: heading
   });
 }
 
-document.getElementById("make").onclick =
-async () => {
+function makeParagraph(block, firstOnPage) {
+  return new docx.Paragraph({
+    bidirectional: true,
 
+    alignment:
+      block.type === "heading"
+        ? docx.AlignmentType.CENTER
+        : docx.AlignmentType.JUSTIFIED,
+
+    pageBreakBefore: firstOnPage,
+
+    keepNext: false,
+    keepLines: false,
+
+    spacing: {
+      before: 0,
+      after: 0,
+      line: 240,
+      lineRule: "auto"
+    },
+
+    children: [
+      makeRun(
+        block.text,
+        block.type === "heading"
+      )
+    ]
+  });
+}
+
+function footerFor(vol, page) {
+  return new docx.Footer({
+    children: [
+      new docx.Paragraph({
+        bidirectional: true,
+        alignment: docx.AlignmentType.CENTER,
+        spacing: {
+          before: 0,
+          after: 0
+        },
+        children: [
+          new docx.TextRun({
+            text: `الجزء ${vol} | الصفحة ${page}`,
+            font: "Traditional Arabic",
+            rightToLeft: true,
+            size: 20
+          })
+        ]
+      })
+    ]
+  });
+}
+
+document.getElementById("make").onclick = async () => {
   try {
-
     const bookId = getBookId();
 
-    statusEl.textContent =
-      "الاتصال بتراث...";
-
     const pages =
-      await loadPages(PAGE_COUNT, bookId);
+      await loadPages(bookId, PAGE_COUNT);
 
     statusEl.textContent =
-      "تحليل بنية الكتاب...";
+      "بناء Word بنمط 1:1...";
 
-    const blocks =
-      buildBookBlocks(pages);
+    /*
+      نستخدم Section لكل صفحة في اختبار الـ50.
+      فائدته الآن:
+      - حد الصفحة قطعي.
+      - footer يأخذ meta.page الحقيقي من تراث.
+      - لا نعتمد على تخمين ترقيم API.
 
-    const children = [];
+      بعد نجاح 50/50 يمكننا تحسين بنية 2236 صفحة
+      دون المساس بالتنسيق.
+    */
+    const sections = [];
 
-    /* عنوان الكتاب */
-    children.push(
-      new docx.Paragraph({
-        bidirectional: true,
-        alignment: docx.AlignmentType.CENTER,
+    for (let i = 0; i < pages.length; i++) {
+      const page = pages[i];
 
-        spacing: {
-          before: 300,
-          after: 180
+      let blocks = page.blocks;
+
+      if (!blocks.length) {
+        blocks = [{
+          type: "paragraph",
+          text: ""
+        }];
+      }
+
+      const children = blocks.map(
+        (block, j) =>
+          makeParagraph(block, false)
+      );
+
+      sections.push({
+        properties: {
+          type:
+            i === 0
+              ? undefined
+              : docx.SectionType.NEXT_PAGE,
+
+          page: {
+            size: {
+              width: 11906,
+              height: 16838
+            },
+
+            margin: {
+              top: 794,       // 14 mm
+              bottom: 794,    // 14 mm
+              left: 907,      // 16 mm
+              right: 907,     // 16 mm
+              footer: 283     // 5 mm
+            }
+          }
         },
 
-        children: [
-          arabicRun(
-            pages[0].meta.book_name,
-            {
-              bold: true,
-              size: 44
-            }
+        footers: {
+          default: footerFor(
+            page.meta.vol,
+            page.meta.page
           )
-        ]
-      })
-    );
-
-    /* المؤلف */
-    children.push(
-      new docx.Paragraph({
-        bidirectional: true,
-        alignment: docx.AlignmentType.CENTER,
-
-        spacing: {
-          after: 300
         },
 
-        children: [
-          arabicRun(
-            pages[0].meta.author_name,
-            {
-              size: 30
-            }
-          )
-        ]
-      })
-    );
-
-    for (const block of blocks) {
-
-      if (block.type === "page") {
-        children.push(
-          pageMarker(
-            block.vol,
-            block.page
-          )
-        );
-      }
-
-      else if (block.type === "title") {
-        children.push(
-          headingParagraph(block.text, block.level || 2)
-        );
-      }
-
-      else if (block.type === "text") {
-        children.push(
-          richNormalParagraph(block)
-        );
-      }
+        children
+      });
     }
-
-    statusEl.textContent =
-      "بناء ملف Word...";
 
     const documentFile =
       new docx.Document({
-
-        sections: [{
-          properties: {
-            page: {
-              margin: {
-                top: 900,
-                right: 900,
-                bottom: 900,
-                left: 900
-              }
-            }
-          },
-
-          children
-        }]
+        sections
       });
 
     statusEl.textContent =
@@ -731,13 +424,14 @@ async () => {
     const a =
       document.createElement("a");
 
-    a.href = url;
     const safeName =
-      (pages[0]?.meta?.book_name || ("book-" + bookId))
-        .replace(/[\\/:*?"<>|]/g, "-");
+      (pages[0]?.meta?.book_name ||
+       `book-${bookId}`)
+      .replace(/[\\/:*?"<>|]/g, "-");
 
+    a.href = url;
     a.download =
-      safeName + "-50-pages.docx";
+      `${safeName}-1to1-50.docx`;
 
     a.click();
 
@@ -746,15 +440,20 @@ async () => {
       10000
     );
 
+    const paragraphCount =
+      pages.reduce(
+        (n, p) => n + p.blocks.length,
+        0
+      );
+
     statusEl.textContent =
-      `✓ تم إنشاء ${PAGE_COUNT} صفحة\n` +
-      `الحجم: ${(blob.size / 1024).toFixed(1)} KB\n` +
-      `العناصر: ${blocks.length}`;
+      `✓ تم إنشاء ${PAGE_COUNT} صفحة مصدر\n` +
+      `الوضع: 1:1\n` +
+      `الأجزاء: ${sections.length}\n` +
+      `الفقرات: ${paragraphCount}\n` +
+      `الحجم: ${(blob.size / 1024).toFixed(1)} KB`;
 
-  }
-
-  catch (error) {
-
+  } catch (error) {
     console.error(error);
 
     statusEl.textContent =
@@ -763,7 +462,6 @@ async () => {
       ": " +
       error.message;
   }
-
 };
 </script>
 
