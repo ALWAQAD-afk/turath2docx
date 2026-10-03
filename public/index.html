@@ -300,6 +300,11 @@ function makeParagraph(block, firstOnPage) {
     keepNext: false,
     keepLines: false,
 
+    // PATCH #3:
+    // Match python-docx Golden:
+    // <w:widowControl w:val="0"/>
+    widowControl: false,
+
     spacing: {
       before: 0,
       after: 0,
