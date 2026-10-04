@@ -1,6 +1,22 @@
+# Dependencies
 node_modules/
+
+# Runtime cache (server-side)
 server/cache/
+
+# Generated output
 *.docx
+*.epub
+*.tgz
+
+# Python
 __pycache__/
-*.py.PASS
+*.py[cod]
+
+# OS junk
 .DS_Store
+Thumbs.db
+
+# Local dev
+*.local
+.env

@@ -3,71 +3,380 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#0a7d5a">
 <title>تراث ← Word</title>
 
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Amiri:wght@400;700&family=Tajawal:wght@400;500;700&display=swap" rel="stylesheet">
+
 <style>
-body {
-  font-family: sans-serif;
-  max-width: 700px;
-  margin: 30px auto;
-  padding: 20px;
-  line-height: 1.8;
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg: #f6f2ea;
+  --surface: #ffffff;
+  --surface-2: #fbfaf6;
+  --text: #1a1a1a;
+  --text-muted: #6a6a6a;
+  --primary: #0a7d5a;
+  --primary-dark: #075a42;
+  --primary-light: #d9f0e6;
+  --border: #e5e0d5;
+  --danger: #b91c1c;
+  --radius: 14px;
+  --radius-sm: 10px;
+  --shadow-sm: 0 1px 2px rgba(0,0,0,0.04);
+  --shadow: 0 4px 16px rgba(10, 125, 90, 0.06), 0 1px 3px rgba(0,0,0,0.04);
+  --shadow-lg: 0 12px 40px rgba(10, 125, 90, 0.12);
 }
-button {
+
+html, body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'Tajawal', system-ui, -apple-system, sans-serif;
+  font-size: 16px;
+  line-height: 1.7;
+  -webkit-font-smoothing: antialiased;
+  min-height: 100%;
+}
+
+body { padding: 24px 16px 64px; }
+
+.app { max-width: 640px; margin: 0 auto; }
+
+.header { text-align: center; padding: 24px 0 32px; }
+
+.header .logo {
+  width: 56px; height: 56px;
+  margin: 0 auto 14px;
+  border-radius: 14px;
+  background: linear-gradient(135deg, var(--primary), var(--primary-dark));
+  display: flex; align-items: center; justify-content: center;
+  box-shadow: var(--shadow-lg);
+}
+
+.header .logo svg {
+  width: 28px; height: 28px;
+  stroke: #fff; fill: none;
+  stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round;
+}
+
+.header h1 {
+  font-family: 'Amiri', serif;
+  font-size: 32px; font-weight: 700;
+  color: var(--text);
+  letter-spacing: -0.01em;
+  margin-bottom: 6px;
+}
+
+.header h1 .arrow {
+  color: var(--primary);
+  font-family: 'Tajawal', sans-serif;
+  font-weight: 400;
+  margin: 0 4px;
+}
+
+.header .tagline {
+  color: var(--text-muted);
+  font-size: 15px;
+}
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 24px;
+  margin-bottom: 16px;
+  box-shadow: var(--shadow);
+}
+
+.card--secondary {
+  background: var(--surface-2);
+  box-shadow: var(--shadow-sm);
+}
+
+.card .card-title {
+  font-family: 'Amiri', serif;
+  font-size: 20px; font-weight: 700;
+  margin-bottom: 4px;
+  color: var(--text);
+}
+
+.card .card-desc {
+  color: var(--text-muted);
+  font-size: 14px;
+  margin-bottom: 18px;
+}
+
+.field-label {
+  display: block;
+  font-size: 14px; font-weight: 500;
+  color: var(--text);
+  margin-bottom: 8px;
+}
+
+.input {
   width: 100%;
-  padding: 14px;
-  font-size: 18px;
+  padding: 14px 16px;
+  font-size: 15px;
+  font-family: 'Tajawal', sans-serif;
+  border: 1.5px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  transition: border-color 0.15s, box-shadow 0.15s;
+  direction: ltr;
+  text-align: left;
 }
-#status {
-  margin-top: 20px;
+
+.input:focus {
+  outline: none;
+  border-color: var(--primary);
+  box-shadow: 0 0 0 4px var(--primary-light);
+}
+
+.input::placeholder { color: #b8b3a5; }
+
+.btn {
+  width: 100%;
+  padding: 14px 20px;
+  font-size: 15px; font-weight: 600;
+  font-family: 'Tajawal', sans-serif;
+  border: 1.5px solid transparent;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  display: inline-flex;
+  align-items: center; justify-content: center;
+  gap: 8px;
+  line-height: 1.2;
+}
+
+.btn:active { transform: translateY(1px); }
+
+.btn--primary {
+  background: var(--primary);
+  color: #fff;
+  box-shadow: 0 2px 8px rgba(10, 125, 90, 0.25);
+}
+
+.btn--primary:hover {
+  background: var(--primary-dark);
+  box-shadow: 0 4px 14px rgba(10, 125, 90, 0.3);
+}
+
+.btn--ghost {
+  background: transparent;
+  color: var(--text);
+  border-color: var(--border);
+}
+
+.btn--ghost:hover {
+  border-color: var(--primary);
+  color: var(--primary);
+  background: var(--primary-light);
+}
+
+.btn--sm { padding: 10px 14px; font-size: 13px; font-weight: 500; }
+
+.btn[disabled] { opacity: 0.5; cursor: not-allowed; pointer-events: none; }
+
+.btn svg {
+  width: 18px; height: 18px;
+  stroke: currentColor; fill: none;
+  stroke-width: 2; stroke-linecap: round; stroke-linejoin: round;
+}
+
+.btn-row { display: grid; gap: 10px; margin-top: 14px; }
+
+.divider {
+  display: flex; align-items: center; gap: 12px;
+  color: var(--text-muted); font-size: 13px;
+  margin: 24px 0;
+}
+
+.divider::before,
+.divider::after {
+  content: ''; flex: 1; height: 1px;
+  background: var(--border);
+}
+
+.file-input {
+  width: 100%;
+  padding: 12px;
+  font-size: 14px;
+  font-family: 'Tajawal', sans-serif;
+  border: 1.5px dashed var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+details.advanced { margin-top: 4px; }
+
+.card.is-disabled {
+  opacity: 0.65;
+  filter: grayscale(0.15);
+  position: relative;
+}
+
+.card.is-disabled .file-input {
+  cursor: not-allowed;
+}
+
+.badge {
+  display: inline-block;
+  font-family: 'Tajawal', sans-serif;
+  font-size: 11px;
+  font-weight: 500;
+  background: #fef3c7;
+  color: #92400e;
+  padding: 2px 8px;
+  border-radius: 999px;
+  margin-right: 8px;
+  vertical-align: middle;
+  letter-spacing: 0.02em;
+}
+
+details.advanced > summary {
+  cursor: pointer;
+  list-style: none;
+  color: var(--text-muted);
+  font-size: 13px;
+  padding: 8px 0;
+  user-select: none;
+}
+
+details.advanced > summary::-webkit-details-marker { display: none; }
+
+details.advanced > summary::before {
+  content: '\25B8 ';
+  color: var(--primary);
+  display: inline-block;
+  transition: transform 0.15s;
+  margin-left: 4px;
+}
+
+details.advanced[open] > summary::before { transform: rotate(90deg); }
+
+.status {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 18px 20px;
+  min-height: 60px;
   white-space: pre-wrap;
+  font-size: 14px;
+  line-height: 1.7;
+  color: var(--text);
+  margin-top: 20px;
+  transition: all 0.2s;
 }
+
+.status[data-state="loading"] {
+  border-color: var(--primary);
+  background: var(--primary-light);
+}
+
+.status[data-state="success"] {
+  border-color: var(--primary);
+  background: var(--primary-light);
+  color: var(--primary-dark);
+}
+
+.status[data-state="error"] {
+  border-color: #fca5a5;
+  background: #fef2f2;
+  color: var(--danger);
+}
+
+.page-footer {
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 12px;
+  margin-top: 40px;
+  line-height: 1.9;
+}
+
+.page-footer a { color: var(--primary); text-decoration: none; }
+.page-footer a:hover { text-decoration: underline; }
 </style>
 <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
 </head>
 
 <body>
 
-<h1>تراث ← Word</h1>
-<p>Parser v4 — بنية تراث وحفظ مواضع الصفحات.</p>
+<div id="root" class="app">
 
+  <header class="header">
+    <div class="logo">
+      <svg viewBox="0 0 24 24"><path d="M4 19.5V6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v13.5M4 19.5a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2M4 19.5a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2M8 7h8M8 11h6"/></svg>
+    </div>
+    <h1>تراث <span class="arrow">&#8592;</span> Word</h1>
+    <p class="tagline">حوّل كتب تراث إلى ملفات Word قابلة للتحرير</p>
+  </header>
 
-<div style="margin:24px 0">
-  <label for="bookUrl" style="display:block;margin-bottom:10px">
-    رابط الكتاب في تراث
-  </label>
+  <section class="card">
+    <h2 class="card-title">حوّل كتابًا من تراث</h2>
+    <p class="card-desc">الصق رابط الكتاب، وسننتج ملف Word بمطابقة 1:1 للطبعة الأصلية.</p>
 
-  <input
-    id="bookUrl"
-    type="url"
-    value="https://app.turath.io/book/6684"
-    placeholder="https://app.turath.io/book/6684"
-    dir="ltr"
-    style="box-sizing:border-box;width:100%;padding:14px;font-size:16px;margin-bottom:12px"
-  >
+    <label class="field-label" for="bookUrl">رابط الكتاب</label>
+    <input
+      id="bookUrl"
+      class="input"
+      type="url"
+      placeholder="https://app.turath.io/book/6684"
+      dir="ltr"
+      autocomplete="off"
+      autocapitalize="off"
+      autocorrect="off"
+      spellcheck="false"
+      inputmode="url"
+    >
 
-  <button id="make">إنشاء Word — أول 50 صفحة</button>
-<button id="diagnose"
- style="margin-top:12px">
- تشخيص 50 صفحة
-</button>
-<button id="makeFull" style="margin-top:12px;background:#0b7;color:#fff;font-weight:bold">
-  إنشاء الكتاب كاملًا (2236 صفحة)
-</button>
+    <div class="btn-row">
+      <button id="makeFull" class="btn btn--primary">
+        <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>
+        إنشاء الكتاب كاملًا
+      </button>
+    </div>
+
+    <details class="advanced">
+      <summary>خيارات متقدمة</summary>
+      <div class="btn-row">
+        <button id="diagnose" class="btn btn--ghost btn--sm">
+          تشخيص 50 صفحة (ملف ZIP)
+        </button>
+      </div>
+    </details>
+  </section>
+
+  <div class="divider">أو</div>
+
+  <section class="card card--secondary is-disabled">
+    <h2 class="card-title">
+      ارفع ملف EPUB
+      <span class="badge">قريبًا</span>
+    </h2>
+    <p class="card-desc">حوّل كتابًا محفوظًا على جهازك بدون الاتصال بخادم.</p>
+    <input
+      id="epubInput"
+      class="file-input"
+      type="file"
+      accept=".epub,application/epub+zip"
+      disabled
+    >
+  </section>
+
+  <div id="status" class="status">جاهز. الصق رابط الكتاب في الأعلى للبدء.</div>
+
+  <footer class="page-footer">
+    محلي 100% · لا يُرسل نص الكتاب إلى أي خادم · <a href="https://app.turath.io" target="_blank" rel="noopener">تراث</a>
+  </footer>
+
 </div>
-
-<hr style="margin:28px 0">
-
-<div>
-  <p>أو اختر ملف EPUB من جهازك:</p>
-  <input
-    id="epubInput"
-    type="file"
-    accept=".epub,application/epub+zip"
-  >
-</div>
-
-<div id="status">جاهز.</div>
 
 <script src="https://unpkg.com/docx@9.5.1/dist/index.umd.cjs"></script>
 
@@ -496,7 +805,8 @@ function footerFor(vol, page) {
   });
 }
 
-document.getElementById("make").onclick = async () => {
+const __makeBtn = document.getElementById("make");
+if (__makeBtn) __makeBtn.onclick = async () => {
   try {
     const bookId = getBookId();
 
@@ -1222,13 +1532,22 @@ document.getElementById("makeFull").onclick = async () => {
       (n, p) => n + (p.blocks ? p.blocks.length : 0), 0
     );
 
+    const totalSeconds = (Date.now() - window.__fullStart) / 1000;
+    const minutes = Math.floor(totalSeconds / 60);
+    const seconds = Math.round(totalSeconds % 60);
+    const elapsed =
+      minutes > 0
+        ? minutes + " د " + seconds + " ث"
+        : seconds + " ث";
+
     statusEl.textContent =
       "✓ تم إنشاء الكتاب كاملًا\n" +
       "الوضع: 1:1\n" +
       "الصفحات المصدرية: " + pages.length + "\n" +
       "الأقسام (الغلاف + الأجزاء): " + sections.length + "\n" +
       "الفقرات: " + totalParagraphs + "\n" +
-      "الحجم: " + (blob.size / 1024 / 1024).toFixed(2) + " MB";
+      "الحجم: " + (blob.size / 1024 / 1024).toFixed(2) + " MB\n" +
+      "الزمن: " + elapsed;
   } catch (error) {
     console.error(error);
     statusEl.textContent = "❌ فشل\n\n" + error.name + ": " + error.message;
