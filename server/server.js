@@ -124,6 +124,160 @@ app.get("/api/book/:id", async (req, res) => {
   }
 });
 
+// PATCH #25 — books-v3 fast path
+//
+// بدل جلب الكتاب صفحة صفحة من api.turath.io/page،
+// نحاول أولًا تنزيل snapshot كامل من CDN:
+//
+//   https://files.turath.io/books-v3/<id>.json
+//
+// هذا المسار اختُبر على:
+//   98093 -> 640 pages
+//   6684  -> 2236 pages
+//
+// لا نثق بالملف ثقة عمياء:
+// - يجب أن يكون ID رقمًا موجبًا.
+// - يجب أن تكون pages مصفوفة.
+// - يمكن للعميل تمرير expected للتحقق من العدد.
+// - عند أي فشل نعيد status مناسبًا، والعميل يرجع تلقائيًا
+//   إلى مسار PATCH #24 القديم.
+//
+// لا نستخدم turath-sdk هنا حتى لا نعتمد على مساره القديم books/.
+app.get("/api/book/:id/full", async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const expected = Number(req.query.expected || 0);
+
+    if (!Number.isSafeInteger(id) || id <= 0) {
+      return res.status(400).json({
+        error: "Invalid book id"
+      });
+    }
+
+    if (
+      expected &&
+      (!Number.isSafeInteger(expected) || expected <= 0)
+    ) {
+      return res.status(400).json({
+        error: "Invalid expected page count"
+      });
+    }
+
+    const url =
+      `https://files.turath.io/books-v3/${id}.json`;
+
+    const started = Date.now();
+
+    const response = await fetch(url, {
+      headers: {
+        Accept: "application/json"
+      }
+    });
+
+    if (!response.ok) {
+      return res.status(response.status).json({
+        error:
+          `Turath books-v3 HTTP ${response.status}`
+      });
+    }
+
+    const data = await response.json();
+
+    if (!data || !Array.isArray(data.pages)) {
+      return res.status(502).json({
+        error: "Invalid books-v3 payload: pages[] missing"
+      });
+    }
+
+    if (expected && data.pages.length !== expected) {
+      return res.status(409).json({
+        error:
+          `books-v3 integrity mismatch: ` +
+          `expected ${expected}, got ${data.pages.length}`,
+        expected,
+        actual: data.pages.length
+      });
+    }
+
+    /*
+     * books-v3 page shape:
+     *
+     *   {
+     *     page: <printed page>,
+     *     vol:  <volume>,
+     *     text: <HTML/text>
+     *   }
+     *
+     * نحوله هنا إلى نفس الشكل الذي يفهمه parsePage()
+     * في المتصفح ومسار /pages القديم:
+     *
+     *   {
+     *     pg:   <internal source index>,
+     *     meta: { page, vol },
+     *     text
+     *   }
+     *
+     * هكذا لا نغيّر أي شيء في منطق DOCX.
+     */
+    const pages = data.pages.map((page, index) => ({
+      pg: index + 1,
+      meta: {
+        page: page?.page,
+        vol: page?.vol
+      },
+      text: page?.text ?? ""
+    }));
+
+    /*
+     * فحص metadata الأساسي قبل إرسال عشرات MB للعميل.
+     * page قد يكون اختياريًا في بعض المواد،
+     * لكن vol مطلوب حاليًا لبناء sections/footer.
+     */
+    const badVolIndex = pages.findIndex(
+      page =>
+        page.meta.vol === undefined ||
+        page.meta.vol === null
+    );
+
+    if (badVolIndex !== -1) {
+      return res.status(422).json({
+        error:
+          `books-v3 page ${badVolIndex + 1} ` +
+          `has no volume metadata`
+      });
+    }
+
+    const elapsedMs = Date.now() - started;
+
+    console.log(
+      `[books-v3] ${id}: ` +
+      `${pages.length} pages in ${elapsedMs} ms`
+    );
+
+    res.json({
+      book_id: id,
+      source: "books-v3",
+      count: pages.length,
+      elapsed_ms: elapsedMs,
+      pages
+    });
+
+  } catch (e) {
+    console.error(
+      "[books-v3] failed:",
+      req.params.id,
+      e
+    );
+
+    res.status(502).json({
+      error:
+        e && e.message
+          ? e.message
+          : "books-v3 fetch failed"
+    });
+  }
+});
+
 app.get("/api/book/:id/page/:pg", async (req, res) => {
   try {
     const page = await getPageRetry(

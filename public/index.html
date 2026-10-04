@@ -1189,6 +1189,156 @@ const FULL_CONCURRENT_BATCHES = 1;
 
 async function loadAllPages(bookId, total, onProgress) {
   /*
+   * PATCH #25 — books-v3 fast path
+   *
+   * المسار الطبيعي الآن:
+   *
+   *   browser
+   *      ↓
+   *   /api/book/:id/full?expected=N
+   *      ↓
+   *   files.turath.io/books-v3/<id>.json
+   *
+   * إذا وصل الكتاب كاملًا وبالعدد المتوقع نستخدمه مباشرة.
+   *
+   * إذا حدث:
+   * - 404
+   * - timeout/network error
+   * - JSON غير صالح
+   * - pages.length !== total
+   * - metadata ناقصة
+   *
+   * فلا ننشئ كتابًا ناقصًا، ولا نفشل مباشرة:
+   * نرجع إلى PATCH #24 القديم الآمن.
+   */
+  try {
+    const fastStart = Date.now();
+
+    console.log(
+      `[loadAllPages] trying books-v3 fast path: ` +
+      `${bookId}, expected=${total}`
+    );
+
+    const fastRes = await fetch(
+      `/api/book/${bookId}/full?expected=${total}`
+    );
+
+    if (!fastRes.ok) {
+      let reason = `HTTP ${fastRes.status}`;
+
+      try {
+        const err = await fastRes.json();
+
+        if (err && err.error) {
+          reason += ` — ${err.error}`;
+        }
+      } catch (_) {}
+
+      throw new Error(reason);
+    }
+
+    const fastData = await fastRes.json();
+
+    if (
+      !fastData ||
+      !Array.isArray(fastData.pages)
+    ) {
+      throw new Error(
+        "استجابة books-v3 لا تحتوي pages[]"
+      );
+    }
+
+    if (fastData.pages.length !== total) {
+      throw new Error(
+        `books-v3 أعاد ${fastData.pages.length} ` +
+        `صفحة بدل ${total}`
+      );
+    }
+
+    const fastPages = new Array(total);
+
+    for (let i = 0; i < total; i++) {
+      const rawPage = fastData.pages[i];
+
+      if (!rawPage) {
+        throw new Error(
+          `books-v3: الصفحة المصدرية ${i + 1} فارغة`
+        );
+      }
+
+      const parsed = parsePage(rawPage);
+
+      if (!parsed) {
+        throw new Error(
+          `books-v3: فشل تحليل الصفحة المصدرية ${i + 1}`
+        );
+      }
+
+      if (
+        !parsed.meta ||
+        parsed.meta.vol === undefined ||
+        parsed.meta.vol === null
+      ) {
+        throw new Error(
+          `books-v3: الصفحة المصدرية ${i + 1} ` +
+          `بلا meta.vol`
+        );
+      }
+
+      fastPages[i] = parsed;
+    }
+
+    /*
+     * حارس نهائي مستقل للمسار السريع.
+     */
+    const fastMissing = [];
+
+    for (let i = 0; i < total; i++) {
+      if (!fastPages[i]) {
+        fastMissing.push(i + 1);
+      }
+    }
+
+    if (fastMissing.length > 0) {
+      throw new Error(
+        `books-v3 integrity failed: ` +
+        `${fastMissing.length} missing pages`
+      );
+    }
+
+    const fastElapsed =
+      ((Date.now() - fastStart) / 1000).toFixed(1);
+
+    console.log(
+      `[loadAllPages] books-v3 integrity OK: ` +
+      `${fastPages.length}/${total} source pages ` +
+      `in ${fastElapsed}s`
+    );
+
+    if (onProgress) {
+      onProgress(total, total, fastElapsed);
+    }
+
+    return fastPages;
+
+  } catch (fastError) {
+    /*
+     * مهم:
+     * فشل CDN ليس فشل إنشاء الكتاب.
+     *
+     * PATCH #24 يبقى fallback كاملًا كما كان.
+     */
+    console.warn(
+      `[loadAllPages] books-v3 unavailable/invalid; ` +
+      `falling back to PATCH #24:`,
+      fastError
+    );
+  }
+
+  /*
+   * PATCH #24
+
+  /*
    * PATCH #24
    *
    * المشكلة القديمة:
@@ -1603,14 +1753,15 @@ document.getElementById("makeFull").onclick = async () => {
     const bookName = meta.name || meta.book_name || ("book-" + bookId);
     const authorName = extractAuthor(meta);
 
-    window.__fullStart = Date.now();
+    // PATCH #26 — high-resolution total timer
+    window.__fullStart = performance.now();
     statusEl.textContent = bookName + " — " + total + " صفحة — بدء الجلب...";
 
     const pages = await loadAllPages(
       bookId,
       total,
       (done, total, elapsed) => {
-        const rate = elapsed > 0 ? (done / (Date.now() - window.__fullStart) * 1000).toFixed(1) : "?";
+        const rate = elapsed > 0 ? (done / (performance.now() - window.__fullStart) * 1000).toFixed(1) : "?";
         statusEl.textContent =
           `جُلبت ${done} / ${total} صفحة
 ` +
@@ -1746,13 +1897,17 @@ document.getElementById("makeFull").onclick = async () => {
       (n, p) => n + (p.blocks ? p.blocks.length : 0), 0
     );
 
-    const totalSeconds = (Date.now() - window.__fullStart) / 1000;
+    // PATCH #26 — أجزاء الثانية لأن Patch #25 صار سريعًا جدًا
+    const totalSeconds =
+      (performance.now() - window.__fullStart) / 1000;
+
     const minutes = Math.floor(totalSeconds / 60);
-    const seconds = Math.round(totalSeconds % 60);
+    const seconds = totalSeconds % 60;
+
     const elapsed =
       minutes > 0
-        ? minutes + " د " + seconds + " ث"
-        : seconds + " ث";
+        ? minutes + " د " + seconds.toFixed(2) + " ث"
+        : totalSeconds.toFixed(2) + " ث";
 
     statusEl.textContent =
       "✓ تم إنشاء الكتاب كاملًا\n" +
