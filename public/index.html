@@ -1188,49 +1188,263 @@ async function fetchBatch(bookId, from, to, retries) {
 const FULL_CONCURRENT_BATCHES = 1;
 
 async function loadAllPages(bookId, total, onProgress) {
-  // PATCH #11 — 4 دُفعات متوازية، كل واحدة 40 صفحة،
-  //      = 160 صفحة في كل جولة (بدل 40).
+  /*
+   * PATCH #24
+   *
+   * المشكلة القديمة:
+   * إذا فشلت دفعة 40 صفحة، كان الكود يجلب النصف الأول فقط:
+   *
+   *   81..120  ->  81..100
+   *
+   * ثم ينسى 101..120 نهائيًا.
+   *
+   * ومع all.filter(...) كانت الصفحات المفقودة تختفي بصمت،
+   * فينتج DOCX ناقصًا مع بقاء العنوان يقول العدد الكامل.
+   *
+   * الحل:
+   * 1) أي نطاق يفشل ينقسم إلى نصفين.
+   * 2) النصفان كلاهما يدخلان قائمة العمل.
+   * 3) لا نستخدم filter لإخفاء الثقوب.
+   * 4) بعد الجلب نتحقق أن كل صفحة من 1..total موجودة.
+   * 5) إذا نقصت صفحة واحدة نوقف إنشاء DOCX تمامًا.
+   */
+
   const all = new Array(total);
   let completed = 0;
 
-  const ranges = [];
+  /*
+   * queue ديناميكية.
+   *
+   * نبدأ بدفعات FULL_BATCH_SIZE.
+   * وإذا فشلت دفعة، نضيف نصفيها إلى queue.
+   */
+  const queue = [];
+
   for (let from = 1; from <= total; from += FULL_BATCH_SIZE) {
-    const to = Math.min(from + FULL_BATCH_SIZE - 1, total);
-    ranges.push({ from, to });
+    queue.push({
+      from,
+      to: Math.min(from + FULL_BATCH_SIZE - 1, total)
+    });
   }
 
-  let cursor = 0;
-  async function worker() {
-    while (true) {
-      const idx = cursor++;
-      if (idx >= ranges.length) return;
-      let { from, to } = ranges[idx];
-      const batchStart = Date.now();
-      let data = null;
-      try {
-        data = await fetchBatch(bookId, from, to, 2);
-      } catch (e) {
-        if (to - from + 1 <= 5) throw e;
-        const mid = from + Math.floor((to - from) / 2);
-        data = await fetchBatch(bookId, from, mid, 3);
-        to = mid;
+  /*
+   * عدد الصفحات التي استلمناها بالفعل.
+   * Set يمنع احتساب الصفحة مرتين إذا حدث retry أو overlap.
+   */
+  const received = new Set();
+
+  while (queue.length > 0) {
+    const range = queue.shift();
+    const from = range.from;
+    const to = range.to;
+
+    const batchStart = Date.now();
+
+    let data;
+
+    try {
+      data = await fetchBatch(bookId, from, to, 2);
+    } catch (e) {
+      const size = to - from + 1;
+
+      /*
+       * وصلنا إلى نطاق صغير وما زال يفشل.
+       * هنا لا يجوز تجاوزه بصمت.
+       */
+      if (size <= 5) {
+        throw new Error(
+          `تعذر جلب الصفحات ${from}..${to}. ` +
+          `أوقفت العملية لمنع إنشاء كتاب ناقص. ` +
+          `السبب: ${e.message}`
+        );
       }
-      for (let k = 0; k < data.pages.length; k++) {
-        all[from - 1 + k] = parsePage(data.pages[k]);
+
+      const mid = from + Math.floor((to - from) / 2);
+
+      console.warn(
+        `[loadAllPages] split failed range ` +
+        `${from}..${to} -> ` +
+        `${from}..${mid} + ${mid + 1}..${to}`
+      );
+
+      /*
+       * مهم جدًا:
+       * النصفان كلاهما يعودان إلى قائمة العمل.
+       *
+       * هذا هو إصلاح الخلل الذي كان يسقط النصف الثاني.
+       */
+      queue.unshift(
+        { from: mid + 1, to: to },
+        { from: from, to: mid }
+      );
+
+      continue;
+    }
+
+    if (!data || !Array.isArray(data.pages)) {
+      throw new Error(
+        `استجابة غير صالحة للصفحات ${from}..${to}`
+      );
+    }
+
+    /*
+     * السيرفر يعيد صفحات النطاق بالترتيب.
+     *
+     * لكن لا نفترض أن العدد صحيح:
+     * إذا طلبنا 40 واستلمنا 20 فقط، فهذا خطأ يجب كشفه.
+     */
+    const expectedCount = to - from + 1;
+
+    if (data.pages.length !== expectedCount) {
+      /*
+       * إذا كانت الاستجابة ناقصة، لا نضعها في all ثم نتابع.
+       * نقسم النطاق ونعيد طلبه.
+       */
+      if (expectedCount <= 5) {
+        throw new Error(
+          `النطاق ${from}..${to}: ` +
+          `المتوقع ${expectedCount} صفحات، ` +
+          `لكن الخادم أعاد ${data.pages.length}. ` +
+          `أوقفت العملية لمنع إنشاء كتاب ناقص.`
+        );
       }
-      completed += data.pages.length;
-      const elapsed = ((Date.now() - batchStart) / 1000).toFixed(1);
-      if (onProgress) onProgress(completed, total, elapsed);
+
+      const mid = from + Math.floor((to - from) / 2);
+
+      console.warn(
+        `[loadAllPages] incomplete range ` +
+        `${from}..${to}: ` +
+        `got ${data.pages.length}/${expectedCount}; splitting`
+      );
+
+      queue.unshift(
+        { from: mid + 1, to: to },
+        { from: from, to: mid }
+      );
+
+      continue;
+    }
+
+    for (let k = 0; k < data.pages.length; k++) {
+      const sourcePageNumber = from + k;
+
+      if (
+        sourcePageNumber < 1 ||
+        sourcePageNumber > total
+      ) {
+        throw new Error(
+          `رقم صفحة داخلي خارج النطاق: ${sourcePageNumber}`
+        );
+      }
+
+      const rawPage = data.pages[k];
+
+      if (!rawPage) {
+        throw new Error(
+          `الصفحة المصدرية ${sourcePageNumber} فارغة في استجابة الخادم`
+        );
+      }
+
+      const parsed = parsePage(rawPage);
+
+      if (!parsed) {
+        throw new Error(
+          `فشل تحليل الصفحة المصدرية ${sourcePageNumber}`
+        );
+      }
+
+      all[sourcePageNumber - 1] = parsed;
+
+      if (!received.has(sourcePageNumber)) {
+        received.add(sourcePageNumber);
+        completed++;
+      }
+    }
+
+    const elapsed =
+      ((Date.now() - batchStart) / 1000).toFixed(1);
+
+    if (onProgress) {
+      onProgress(completed, total, elapsed);
     }
   }
 
-  await Promise.all(
-    Array.from({ length: FULL_CONCURRENT_BATCHES }, () => worker())
+  /*
+   * PATCH #24 — الحارس النهائي.
+   *
+   * لا DOCX ناقص بعد الآن.
+   */
+  const missing = [];
+
+  for (let i = 0; i < total; i++) {
+    if (!all[i]) {
+      missing.push(i + 1);
+    }
+  }
+
+  if (missing.length > 0) {
+    const preview = missing.slice(0, 30).join(", ");
+    const more =
+      missing.length > 30
+        ? ` ... (+${missing.length - 30})`
+        : "";
+
+    throw new Error(
+      `فشل فحص سلامة الكتاب: ` +
+      `${missing.length} صفحة مصدرية مفقودة من أصل ${total}. ` +
+      `الصفحات: ${preview}${more}`
+    );
+  }
+
+  if (all.length !== total) {
+    throw new Error(
+      `فشل فحص سلامة الكتاب: ` +
+      `المتوقع ${total} صفحة، ` +
+      `لكن المصفوفة تحتوي ${all.length}.`
+    );
+  }
+
+  /*
+   * تحقق إضافي من metadata.
+   *
+   * meta.vol مطلوب حاليًا لبناء الأقسام والـfooter.
+   * بدل filter القديم الذي كان يحذف الصفحة بصمت،
+   * نتوقف ونخبر المستخدم بالمشكلة.
+   */
+  const badMeta = [];
+
+  for (let i = 0; i < all.length; i++) {
+    const p = all[i];
+
+    if (
+      !p.meta ||
+      p.meta.vol === undefined ||
+      p.meta.vol === null
+    ) {
+      badMeta.push(i + 1);
+    }
+  }
+
+  if (badMeta.length > 0) {
+    const preview = badMeta.slice(0, 30).join(", ");
+    const more =
+      badMeta.length > 30
+        ? ` ... (+${badMeta.length - 30})`
+        : "";
+
+    throw new Error(
+      `هناك ${badMeta.length} صفحة بلا meta.vol. ` +
+      `لن أحذفها بصمت. الصفحات المصدرية: ` +
+      `${preview}${more}`
+    );
+  }
+
+  console.log(
+    `[loadAllPages] integrity OK: ` +
+    `${completed}/${total} source pages`
   );
 
-  return all.filter(function (p) {
-    return p && p.meta && p.meta.vol !== undefined && p.meta.vol !== null;
-  });
+  return all;
 }
 
 // PATCH #16 — تحويل الأرقام العربية/الفارسية إلى غربية
